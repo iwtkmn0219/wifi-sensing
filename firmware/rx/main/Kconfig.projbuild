@@ -1,0 +1,28 @@
+menu "CSI RX Config"
+
+    config CSI_WIFI_CHANNEL
+        int "Wi-Fi channel (TX와 같아야 함)"
+        range 1 13
+        default 11
+
+    config CSI_WIFI_HT40
+        bool "HT40 (secondary below). TX(csi_send)와 같아야 함"
+        default y
+
+    config CSI_OUTPUT_LLTF_ONLY
+        bool "CSI 앞 128바이트(LLTF, 64 서브캐리어)만 출력"
+        default n
+        help
+            시리얼 출력량을 약 1/3로 줄인다. CSI 설정 자체는 그대로이고 len 필드가 128이 된다.
+
+    config CSI_QUEUE_LEN
+        int "CSI 큐 길이 (패킷)"
+        range 4 128
+        default 32
+
+    config CSI_STATS_INTERVAL_S
+        int "STATS 줄 + 헤더 재출력 주기 (초)"
+        range 1 60
+        default 5
+
+endmenu
