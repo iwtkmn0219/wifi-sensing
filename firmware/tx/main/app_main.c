@@ -15,9 +15,13 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <stdatomic.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "nvs_flash.h"
 
+#include "esp_timer.h"
 #include "esp_mac.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -39,6 +43,7 @@
 #define CONFIG_ESP_NOW_PHYMODE           WIFI_PHY_MODE_HT40
 #define CONFIG_ESP_NOW_RATE             WIFI_PHY_RATE_MCS0_LGI
 #define CONFIG_SEND_FREQUENCY               100
+#define CONFIG_TX_STATS_INTERVAL_MS         5000
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
 #define ESP_IF_WIFI_STA ESP_MAC_WIFI_STA
@@ -46,6 +51,39 @@
 
 static const uint8_t CONFIG_CSI_SEND_MAC[] = {0x1a, 0x00, 0x00, 0x00, 0x00, 0x00};
 static const char *TAG = "csi_send";
+
+/* 송신 통계: esp_now_send 호출 / 호출 실패 / 송신 콜백 성공·실패.
+ * 콜백은 Wi-Fi 태스크에서 불리므로 atomic으로 센다. */
+static atomic_uint s_send_calls, s_send_errors, s_cb_ok, s_cb_fail;
+
+static void tx_send_cb(const esp_now_send_info_t *tx_info, esp_now_send_status_t status)
+{
+    if (status == ESP_NOW_SEND_SUCCESS) {
+        atomic_fetch_add(&s_cb_ok, 1);
+    } else {
+        atomic_fetch_add(&s_cb_fail, 1);
+    }
+}
+
+/* 일정 주기로 실제 송신 Hz를 출력한다. 브로드캐스트는 ACK가 없으므로
+ * 콜백 성공 = 공중으로 송출됨(RX 수신 여부는 RX 쪽에서 확인). */
+static void tx_stats_task(void *arg)
+{
+    int64_t last_us = esp_timer_get_time();
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(CONFIG_TX_STATS_INTERVAL_MS));
+        int64_t now_us = esp_timer_get_time();
+        float dt = (now_us - last_us) / 1e6f;
+        last_us = now_us;
+
+        uint32_t calls = atomic_exchange(&s_send_calls, 0);
+        uint32_t errors = atomic_exchange(&s_send_errors, 0);
+        uint32_t ok = atomic_exchange(&s_cb_ok, 0);
+        uint32_t fail = atomic_exchange(&s_cb_fail, 0);
+        ESP_LOGI(TAG, "tx_stats: send %.1f Hz, on-air %.1f Hz, send_err %lu, cb_fail %lu",
+                 calls / dt, ok / dt, (unsigned long)errors, (unsigned long)fail);
+    }
+}
 
 static void wifi_init()
 {
@@ -124,6 +162,7 @@ static void wifi_esp_now_init(esp_now_peer_info_t peer)
         .dcm = false
     };
     ESP_ERROR_CHECK(esp_now_set_peer_rate_config(peer.peer_addr, &rate_config));
+    ESP_ERROR_CHECK(esp_now_register_send_cb(tx_send_cb));
 }
 
 void app_main()
@@ -159,9 +198,13 @@ void app_main()
     ESP_LOGI(TAG, "wifi_channel: %d, send_frequency: %d, mac: " MACSTR,
              CONFIG_LESS_INTERFERENCE_CHANNEL, CONFIG_SEND_FREQUENCY, MAC2STR(CONFIG_CSI_SEND_MAC));
 
+    xTaskCreate(tx_stats_task, "tx_stats", 3072, NULL, 1, NULL);
+
     for (uint32_t count = 0; ; ++count) {
         esp_err_t ret = esp_now_send(peer.peer_addr, (const uint8_t *)&count, sizeof(count));
+        atomic_fetch_add(&s_send_calls, 1);
         if (ret != ESP_OK) {
+            atomic_fetch_add(&s_send_errors, 1);
             ESP_LOGW(TAG, "free_heap: %ld <%s> ESP-NOW send error", esp_get_free_heap_size(), esp_err_to_name(ret));
         }
 

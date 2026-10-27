@@ -57,8 +57,9 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 | 페이로드 | `uint32_t count` = 시퀀스 번호 → RX 출력의 `id` 필드 |
 | 절전 | `WIFI_PS_NONE` |
 
-- TX는 `csi_send` 예제(esp-csi `8633d67`)를 **수정 없이** `firmware\tx`에 복사해 쓴다(동작 확인 완료). `esp-csi\` 안에서 빌드하지 않는다.
-- 주의: TX는 `usleep` 방식(송신 후 대기)이라 실제 주기가 100Hz보다 약간 낮을 수 있다. 측정 결과가 나쁘면 `vTaskDelayUntil` 방식으로 바꾼다.
+- TX는 `csi_send` 예제(esp-csi `8633d67`)를 `firmware\tx`에 복사해 쓴다. `esp-csi\` 안에서 빌드하지 않는다.
+- 원본에서 바꾼 것은 **송신 통계 로그뿐**이다(계약값 무관). 5초마다 `tx_stats: send .. Hz, on-air .. Hz, send_err .., cb_fail ..`를 출력한다.
+- 실측(2026-10-27, COM4): 송신 **약 91Hz**(목표 100Hz), send_err·cb_fail 0. `usleep(10ms)` + 송신 처리 시간으로 주기가 약 11ms가 되는 것으로 추정한다. 100Hz가 필요하면 `vTaskDelayUntil` 방식으로 바꾼다(RX·PC 수정 불필요).
 
 ## RX 출력 → PC 인터페이스
 - 첫 패킷 전에 헤더 줄(`type,id,mac,...`)을 1회 출력하고, 이후 패킷마다 `CSI_DATA,...,len,first_word,"[v0,v1,...]"` 1줄을 출력한다.
