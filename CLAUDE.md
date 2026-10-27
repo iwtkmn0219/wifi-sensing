@@ -83,7 +83,13 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 - [x] PC 로거와 퀵룩 도구 (시뮬레이션으로 검증)
 - [x] RX 수신 확인 (csi_recv 예제, 921600): 68.9Hz, 손실 24.79%, RSSI −61dBm, CSI 384B(192 서브캐리어) — 시리얼 병목 추정, TX 실제 주기 약 91Hz
 - [x] RX 펌웨어 `firmware/rx` 작성 (큐+출력 태스크, STATS, csi_recv와 같은 출력 형식). 빌드 확인, 보드 실측 전
-- [ ] `firmware/rx` 실측 → 921600 vs 2M 비교, 보레이트 확정
+- [x] TX↔RX 연결 확인 (2026-10-27): TX EN 리셋 시각과 RX `id` 리셋을 대조해 RX가 우리 TX 패킷을 받는 것을 확인
+- [x] 2분 연속 측정 (2026-10-27 19:06, 921600, RX 펌웨어는 `firmware/rx`로 추정 — 팀원 확인 필요)
+  - RX(`rx_stats.py`): 153.2s, **71.5Hz**, 손실(id) **21.34%**(2972개), RSSI −50.1dBm(−80/−44), 간격 median 11.56ms, CSI 384B
+  - 같은 구간 TX `tx_stats`: on-air 평균 **90.9Hz**, 오류·재부팅 0 → 예상 송신 13,926 ≈ RX 수신+손실 13,928. TX는 전부 송신, 손실은 RX 쪽
+  - 해석(추정): 921600bps 실효 약 92KB/s ÷ 71.5Hz ≈ 1.29KB/줄 = 측정된 줄 길이 → **시리얼 병목**. RX `STATS`의 `queue_drop`으로 확정 필요
+- [ ] RX 시리얼 병목 해소 → 보레이트 2M(약 155Hz 감당) 또는 LLTF만 출력(약 170Hz) 중 결정 (RX 담당, TX 변경 없음)
+- [ ] TX 91Hz 유지 vs `vTaskDelayUntil`로 100Hz — RX 병목 해소 후 결정 (100Hz면 RX 출력 10% 증가)
 - [ ] RX 출력 형식 확정 — 현재 csi_recv long format 그대로, `rx_id`는 로거 `rx`(포트) 열로 대체 중
 - [ ] 움직임 판별 → 호흡 검출 → 상태 머신 → 알림(텔레그램 등, 이후 AWS IoT Core/Lambda/SNS 확장)
 - [ ] 보드 2대 추가 도착 후 RX2(출입문) 구성, 다중 RX를 `id` 기준으로 정렬
