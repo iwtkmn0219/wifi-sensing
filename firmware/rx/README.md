@@ -62,7 +62,7 @@ STATS,uptime_s=10,rx_hz=90.2,seq_lost=0,loss_pct=0.00,queue_drop=0,bad_payload=0
 
 ```powershell
 cd C:\esp\wifi-sensing\firmware\rx
-idf.py set-target esp32            # 보드: ESP32-D0WD-V3 (esp32 확정)
+idf.py set-target esp32            # TX 보드는 ESP32로 확인됨. RX 보드도 같은지 확인할 것
 idf.py build
 idf.py -p COMx erase-flash         # 새 보드 최초 1회
 idf.py -p COMx flash monitor       # CSI_DATA·STATS 줄 확인 → Ctrl+]로 종료

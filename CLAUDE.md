@@ -19,7 +19,7 @@ ESP32 Wi-Fi CSI로 원룸 안의 **움직임·재실·호흡**을 비접촉으�
 C:\esp\
 ├─ esp-csi\            # Espressif 공식 저장소. 참고 전용, 절대 수정하지 않음
 └─ wifi-sensing\       # 이 저장소
-   ├─ firmware\tx\     # csi_send 기반 (담당: 민준)
+   ├─ firmware\tx\     # csi_send 복사본, 여기서 빌드 (담당: 민준)
    ├─ firmware\rx\     # csi_recv 기반 (담당: 팀원)
    ├─ pc\              # csi_logger.py, csi_io.py, 분석 코드
    ├─ data\            # 수집 로그 (git 제외, RX 1대당 약 200MB/시간)
@@ -29,7 +29,7 @@ C:\esp\
 ## 환경
 - Windows, **ESP-IDF v5.5.6** (EIM으로 설치). 터미널은 `IDF_v5.5.6_Powershell`에서만 `idf.py`가 동작한다.
 - 경로에 한글·공백·괄호를 쓰지 않는다 (`C:\esp` 아래만 사용).
-- 타겟은 `esp32`. RX 보드에서 `ESP32-D0WD-V3 (rev v3.1)` 확인 (10/27, esptool 로그).
+- 타겟은 `esp32`다. TX 보드(COM4, CH340)는 부팅 로그로 **ESP32 rev v3.1, 플래시 4MB**임을 확인했다(2026-10-27). RX 보드 모델은 팀원이 확인해야 한다.
 - v6.x로 올리지 않는다. 예제와 esp-radar 호환을 위해 v5.4 이상, v6 미만을 유지한다.
 
 ## 자주 쓰는 명령
@@ -57,8 +57,9 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 | 페이로드 | `uint32_t count` = 시퀀스 번호 → RX 출력의 `id` 필드 |
 | 절전 | `WIFI_PS_NONE` |
 
-- TX는 현재 `csi_send` 예제를 **수정 없이** 사용 중이다(동작 확인 완료).
-- 주의: TX는 `usleep` 방식(송신 후 대기)이라 실제 주기가 100Hz보다 약간 낮을 수 있다. 측정 결과가 나쁘면 `vTaskDelayUntil` 방식으로 바꾼다.
+- TX는 `csi_send` 예제(esp-csi `8633d67`)를 `firmware\tx`에 복사해 쓴다. `esp-csi\` 안에서 빌드하지 않는다.
+- 원본에서 바꾼 것은 **송신 통계 로그뿐**이다(계약값 무관). 5초마다 `tx_stats: send .. Hz, on-air .. Hz, send_err .., cb_fail ..`를 출력한다.
+- 실측(2026-10-27, COM4): 송신 **약 91Hz**(목표 100Hz), send_err·cb_fail 0. `usleep(10ms)` + 송신 처리 시간으로 주기가 약 11ms가 되는 것으로 추정한다. 100Hz가 필요하면 `vTaskDelayUntil` 방식으로 바꾼다(RX·PC 수정 불필요).
 
 ## RX 출력 → PC 인터페이스
 - 헤더 줄(`type,id,mac,...`)을 부팅 때 1회 + 5초마다 다시 출력하고, 패킷마다 `CSI_DATA,...,len,first_word,"[v0,v1,...]"` 1줄을 출력한다. (`firmware/rx`)
