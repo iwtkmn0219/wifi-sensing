@@ -43,7 +43,7 @@ idf.py -p COMx flash monitor      # 모니터 종료: Ctrl+]
 # PC (pc\에서) — 실행 전 idf.py monitor를 반드시 닫을 것 (포트 독점)
 pip install -r requirements.txt
 python csi_logger.py --simulate                  # 보드 없이 테스트
-python csi_logger.py --port COM5 --out ..\data   # RX 여러 대: --port COM5 COM6
+python csi_logger.py --port COM5 --baud 2000000 --out ..\data   # RX 펌웨어가 2M. RX 여러 대: --port COM5 COM6
 python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래프 PNG
 ```
 

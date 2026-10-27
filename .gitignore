@@ -5,3 +5,4 @@ __pycache__/
 *.png
 managed_components/
 .claude/worktrees/
+.vscode
