@@ -72,14 +72,14 @@ idf.py -p COMx flash monitor       # CSI_DATA·STATS 줄 확인 → Ctrl+]로 �
 
 ```
 csi_rx: own_mac=30:76:f5:..:..:..  filter_tx_mac=1a:00:00:00:00:00
-csi_rx: channel=11  bw=HT40-  lltf_only=0  baud=921600
+csi_rx: channel=11  bw=HT40-  lltf_only=0  baud=2000000
 ```
 
 ## 보레이트 / 출력량 (921600bps 병목 대응)
 
-csi_recv 예제 실측(아래)에서 921600bps가 병목으로 추정됩니다. `queue_drop`이 계속 생기면 다음 중 하나를 씁니다.
+921600bps에서 저장률이 71.5Hz에 그쳐 시리얼 병목으로 판단했고(아래 측정 기록), **현재 보레이트는 2M(2000000)** 입니다. 그래도 `queue_drop`이 계속 생기면 (b)를 씁니다.
 
-- **(a) 보레이트 2M** — `sdkconfig.defaults`의 `CONFIG_ESP_CONSOLE_UART_BAUDRATE=2000000` → `sdkconfig` 삭제 후 다시 빌드. 로거는 `--baud 2000000`. **PC 쪽 명령도 바뀌므로 공유 필요.** CH340은 최대 2Mbps.
+- **(a) 보레이트 2M (적용됨)** — `sdkconfig`와 `sdkconfig.defaults` 둘 다 `CONFIG_ESP_CONSOLE_UART_BAUDRATE=2000000`. `sdkconfig`도 커밋되어 있으므로 값을 바꿀 때는 두 파일을 같이 고칩니다. `idf.py monitor`는 자동으로 따라가지만 **로거는 기본값이 921600이므로 `--baud 2000000`을 반드시 붙입니다.** CH340은 최대 2Mbps.
 - **(b) LLTF만 출력** — `idf.py menuconfig` → **CSI RX Config** → `CSI 앞 128바이트(LLTF, 64 서브캐리어)만 출력`. `len`이 128이 되며 출력량이 약 1/3. CSI 설정 자체는 그대로. **PC 분석은 64 서브캐리어 기준이 됨.**
 
 menuconfig → **CSI RX Config** 기본값: 채널 11 / HT40 y / LLTF만 n / 큐 32 / STATS 5초
@@ -89,9 +89,11 @@ menuconfig → **CSI RX Config** 기본값: 채널 11 / HT40 y / LLTF만 n / 큐
 | 날짜 | 펌웨어 | 보레이트 | 시간 | 수신 Hz | 간격 median / mean / std | 손실률(id) | RSSI 평균 (min/max) | CSI len |
 |---|---|---|---|---|---|---|---|---|
 | 10/27 | csi_recv 예제 | 921600 | 119.5 s | 68.9 | 11.02 / 14.63 / 17.38 ms (>20ms 1541회, max 825ms) | 24.79 % | −61.0 (−80/−55) dBm | 384 B (192 sc) |
+| 10/27 | firmware/rx | 921600 | 153.2 s | 71.5 | 11.56 / 13.99 / 5.97 ms (>20ms 2204회, max 56.8ms) | 21.34 % | −50.1 (−80/−44) dBm | 384 B (192 sc) |
 
 - 10/27 해석(추정): 한 줄 약 1.3KB × 69줄/s ≈ 921600bps 실효 전송량(약 92KB/s)과 일치 → **시리얼 병목**. 예제는 콜백 안에서 출력하므로 출력이 막히는 동안 수신이 누락됨. median 11.02ms → TX 실제 주기 약 91Hz(`usleep` 방식).
-- 다음 측정: 이 펌웨어 921600 → `queue_drop` 확인 → 필요 시 2M.
+- 10/27 firmware/rx 921600: 큐 분리로 max 간격은 825ms → 56.8ms로 줄었지만 저장률 71.5Hz·손실 21.34%로 여전히 시리얼 병목으로 추정 → **2M으로 변경**.
+- 다음 측정: firmware/rx 2M → `queue_drop=0` 확인, 남는 손실이 무선 손실(`seq_lost`)뿐인지 확인.
 
 측정 숫자는 [`pc/rx_stats.py`](../../pc/rx_stats.py)로 계산합니다.
 
@@ -107,7 +109,7 @@ python rx_stats.py ..\data\<세션>\COM4.csv
 ```powershell
 cd C:\esp\wifi-sensing\pc
 pip install -r requirements.txt
-python csi_logger.py --port COM5 --out ..\data         # RX 여러 대: --port COM5 COM6
+python csi_logger.py --port COM5 --baud 2000000 --out ..\data   # RX 여러 대: --port COM5 COM6
 python csi_io.py ..\data\<세션>\COM5.csv               # 히트맵·움직임 그래프 PNG
 ```
 

@@ -8,6 +8,7 @@ CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
 CONFIG_FREERTOS_HZ=1000
 
 # 시리얼 콘솔 (idf.py monitor 도 이 값을 따라감)
-# 921600 = TX/RX/PC 계약값 (pc/csi_logger.py --baud 기본값). 바꾸면 로거 --baud 도 같이
+# 2M: 921600에서 queue_drop(시리얼 병목) 발생 → 상향. CH340 최대값.
+# 로거 기본값(921600)과 다르므로 반드시 csi_logger.py --baud 2000000 으로 실행
 CONFIG_ESP_CONSOLE_UART_CUSTOM=y
-CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=2000000
