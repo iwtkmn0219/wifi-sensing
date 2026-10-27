@@ -1,0 +1,13 @@
+# firmware/rx — ESP-IDF v5.5.6, target esp32
+# esp-csi/examples/get-started/csi_recv/sdkconfig.defaults 그대로 + FREERTOS_HZ=1000
+CONFIG_PARTITION_TABLE_OFFSET=0xa000
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=128
+CONFIG_ESP_WIFI_CSI_ENABLED=y
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_FREERTOS_HZ=1000
+
+# 시리얼 콘솔 (idf.py monitor 도 이 값을 따라감)
+# 921600 = TX/RX/PC 계약값 (pc/csi_logger.py --baud 기본값). 바꾸면 로거 --baud 도 같이
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
