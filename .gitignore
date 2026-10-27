@@ -3,3 +3,5 @@ build/
 sdkconfig.old
 __pycache__/
 *.png
+managed_components/
+.claude/worktrees/

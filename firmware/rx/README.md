@@ -48,7 +48,7 @@ CSI_DATA,1234,1a:00:00:00:00:00,-45,11,...,len,0,"[v0,v1,...]"
 
 ```powershell
 cd C:\esp\wifi-sensing\firmware\rx
-idf.py set-target esp32            # ⚠️ 보드 모델(ESP32/S3) 최종 확인 전
+idf.py set-target esp32            # TX 보드는 ESP32로 확인됨. RX 보드도 같은지 확인할 것
 idf.py build
 idf.py -p COMx erase-flash         # 새 보드 최초 1회
 idf.py -p COMx flash monitor       # CSI_DATA 줄이 흐르는지 확인 → Ctrl+]로 종료

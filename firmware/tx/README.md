@@ -1,6 +1,7 @@
 # TX — CSI 송신기
 
-> 담당: 민준 · 기반: esp-csi `examples/get-started/csi_send` (**수정 없이** 사용, 동작 확인 완료)
+> 담당: 민준 · 기반: esp-csi `examples/get-started/csi_send` (esp-csi `8633d67`, **수정 없이** 복사, 동작 확인 완료)
+> 보드: ESP32 rev v3.1, 플래시 4MB, CH340 USB-시리얼 (부팅 로그로 확인)
 
 일정한 주기로 ESP-NOW 패킷을 브로드캐스트해서 RX가 CSI를 측정할 수 있게 합니다.
 TX는 CSI를 계산하지 않습니다. **같은 채널, 같은 MAC, 일정한 주기**로 보내는 것이 역할의 전부입니다.
@@ -28,11 +29,14 @@ TX는 CSI를 계산하지 않습니다. **같은 채널, 같은 MAC, 일정한 �
 
 ```powershell
 cd C:\esp\wifi-sensing\firmware\tx
-idf.py set-target esp32            # ⚠️ 보드 모델(ESP32/S3) 최종 확인 전
 idf.py build
 idf.py -p COMx erase-flash         # 새 보드 최초 1회
 idf.py -p COMx flash monitor       # 모니터 종료: Ctrl+]
 ```
+
+- `sdkconfig`가 커밋되어 있고 타겟이 이미 `esp32`이므로 `set-target`은 하지 않아도 됩니다. 실행하면 `sdkconfig`가 `sdkconfig.defaults` 기준으로 다시 만들어집니다.
+- 정상 부팅 시 마지막 로그: `csi_send: wifi_channel: 11, send_frequency: 100, mac: 1a:00:00:00:00:00`. 그 뒤로는 송신 오류가 있을 때만 로그가 나옵니다.
+- 부팅 시 `Detected size(4096k) larger than ... (2048k)` 경고가 나오는데, 펌웨어가 2MB 기준으로 빌드되어서이며 동작에는 영향이 없습니다.
 
 플래시가 끝나면 TX는 전원만 들어가 있으면 됩니다. USB 충전기에 꽂아 둬도 됩니다.
 
