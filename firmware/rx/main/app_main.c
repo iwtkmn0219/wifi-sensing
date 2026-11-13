@@ -83,7 +83,9 @@ static volatile uint32_t s_rx_cnt;        /* TX MAC 필터 통과 */
 static volatile uint32_t s_queue_drop;    /* 큐 가득 참 = 출력(시리얼) 병목 */
 static volatile uint32_t s_seq_lost;      /* id 빈 구간 = 무선 구간 손실 */
 static volatile uint32_t s_bad_payload;   /* ESP-NOW payload 아님 → 출력 안 함 */
-static volatile int32_t  s_rssi_sum;
+/* RSSI 누적은 uint32 로 랩어라운드시키고, 구간 차이만 int32 로 해석한다.
+ * int32 누적은 약 4일 연속 동작 시 오버플로(정의되지 않은 동작)가 나고, int64 는 코어 간 읽기가 원자적이지 않다. */
+static volatile uint32_t s_rssi_sum;
 
 /* ---------------- Wi-Fi / ESP-NOW (csi_recv 와 동일 설정) ---------------- */
 static void wifi_init(void)
@@ -150,7 +152,7 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     memcpy(p->buf, info->buf, len);
 
     s_rx_cnt++;
-    s_rssi_sum += info->rx_ctrl.rssi;
+    s_rssi_sum += (uint32_t)(int32_t) info->rx_ctrl.rssi;
     if (s_have_id && p->id > s_last_id + 1) {
         s_seq_lost += p->id - s_last_id - 1;   /* id 감소(TX 재부팅)는 손실로 세지 않음 */
     }
@@ -201,7 +203,7 @@ static void print_task(void *arg)
     const int64_t stats_us = (int64_t) CONFIG_CSI_STATS_INTERVAL_S * 1000000;
     int64_t t_last = esp_timer_get_time();
     uint32_t last_rx = 0, last_drop = 0, last_lost = 0, last_bad = 0;
-    int32_t last_rssi_sum = 0;
+    uint32_t last_rssi_sum = 0;
 
     fputs(CSV_HEADER, stdout);
 
@@ -229,7 +231,7 @@ static void print_task(void *arg)
         int64_t now = esp_timer_get_time();
         if (now - t_last >= stats_us) {
             uint32_t rx = s_rx_cnt, drop = s_queue_drop, lost = s_seq_lost, bad = s_bad_payload;
-            int32_t rssi_sum = s_rssi_sum;
+            uint32_t rssi_sum = s_rssi_sum;
             uint32_t d_rx = rx - last_rx, d_lost = lost - last_lost;
             float secs = (now - t_last) / 1e6f;
             /* 로거는 CSI_DATA / type, 로 시작하지 않는 줄을 무시한다 */
@@ -238,7 +240,7 @@ static void print_task(void *arg)
                    now / 1000000, d_rx / secs, d_lost,
                    (d_rx + d_lost) ? 100.0f * d_lost / (d_rx + d_lost) : 0.0f,
                    drop - last_drop, bad - last_bad,
-                   d_rx ? (float)(rssi_sum - last_rssi_sum) / d_rx : 0.0f,
+                   d_rx ? (float)(int32_t)(rssi_sum - last_rssi_sum) / d_rx : 0.0f,
                    esp_get_free_heap_size());
             fputs(CSV_HEADER, stdout);   /* 로거를 늦게 켜도 헤더를 받도록 */
             last_rx = rx; last_drop = drop; last_lost = lost; last_bad = bad; last_rssi_sum = rssi_sum;

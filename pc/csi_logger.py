@@ -2,9 +2,10 @@
 CSI 로거 — esp-csi `csi_recv` 시리얼 출력을 CSV로 저장하고, 시나리오 라벨을 붙인다.
 
 사용 예
-    # 실제 보드 (idf.py monitor는 반드시 종료한 뒤 실행)
+    # 실제 보드 (idf.py monitor는 반드시 종료한 뒤 실행). 기본 보레이트 2M = firmware/rx
     python csi_logger.py --port COM5
-    python csi_logger.py --port COM5 COM6 --baud 921600      # RX 여러 대
+    python csi_logger.py --port COM5 COM6                    # RX 여러 대
+    python csi_logger.py --port COM5 --baud 921600           # csi_recv 예제 등 다른 펌웨어
 
     # 보드 없이 테스트 (가짜 CSI 생성, 0.25Hz 호흡 신호 포함)
     python csi_logger.py --simulate
@@ -14,9 +15,14 @@ CSI 로거 — esp-csi `csi_recv` 시리얼 출력을 CSV로 저장하고, 시�
     Enter만           : 현재 상태 출력
     q + Enter         : 종료
 
-출력 (logs/<세션시각>/)
-    <rx>.csv      : 패킷 1개 = 1행. pc_time, label, rx + 보드가 보낸 필드 전부
-    events.csv    : 라벨 변경 시각 기록
+출력 (저장소의 data/<세션시각>/, --out으로 변경 가능. data/는 git 제외)
+    <rx>.csv       : 패킷 1개 = 1행. pc_time, label, rx + 보드가 보낸 필드 전부 (검증 통과 행만)
+    <rx>_2.csv ... : 수집 중 열 구성이 바뀌었을 때(펌웨어 교체 등) 이어지는 파일
+    <rx>_stats.csv : RX의 STATS 줄 (queue_drop, seq_lost 등). 원문은 raw 열
+    events.csv     : 라벨 변경 시각 기록
+
+손상 처리 (시리얼 바이트 손실 대비, 자세한 규칙은 RxWorker 참고)
+    값 개수 ≠ len 등 깨진 행은 저장하지 않고 '손상 행'으로 센다. 깨진 헤더는 무시한다.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ import argparse
 import csv
 import math
 import random
+import re
 import sys
 import threading
 import time
@@ -49,6 +56,9 @@ SHORT_FMT = (  # C5 / C6 / C61
 ).split(",")
 DEFAULT_FORMATS = {len(LONG_FMT): LONG_FMT, len(SHORT_FMT): SHORT_FMT}
 SEQ_KEYS = ("seq", "id")  # TX의 count가 들어 있는 필드 (예제는 'id')
+
+# 실행 위치와 무관하게 저장소 루트의 data/ 에 저장한다 (pc/ 의 상위 폴더)
+DEFAULT_OUT = Path(__file__).resolve().parent.parent / "data"
 
 
 class Shared:
@@ -76,6 +86,8 @@ class Stats:
         self.win_lost = 0
         self.win_rssi = 0
         self.parse_errors = 0
+        self.bad_rows = 0     # 값 개수 ≠ len 등 손상 행 (저장 안 함)
+        self.bad_headers = 0  # 손상된 헤더 줄 (무시함)
         self.seq_resets = 0
 
     def update(self, seq: int | None, rssi: int | None, csi_len: int | None) -> None:
@@ -107,6 +119,10 @@ class Stats:
         )
         if self.parse_errors:
             msg += f" | 파싱 실패 {self.parse_errors}"
+        if self.bad_rows:
+            msg += f" | 손상 행 {self.bad_rows}"
+        if self.bad_headers:
+            msg += f" | 손상 헤더 {self.bad_headers}"
         if self.seq_resets:
             msg += f" | seq 리셋 {self.seq_resets}"
         return msg
@@ -119,8 +135,20 @@ def to_int(value: str) -> int | None:
         return None
 
 
+STATS_KEYS = ("uptime_s", "rx_hz", "seq_lost", "loss_pct", "queue_drop",
+              "bad_payload", "rssi_avg", "free_heap")  # firmware/rx STATS 줄
+
+
 class RxWorker(threading.Thread):
-    """RX 하나(시리얼 포트 하나 또는 시뮬레이터)를 읽어서 CSV로 저장한다."""
+    """RX 하나(시리얼 포트 하나 또는 시뮬레이터)를 읽어서 CSV로 저장한다.
+
+    시리얼 바이트 손실(2M에서 실측)에 대비한 검증
+      - 헤더: 알려진 형식이면 바로 사용, 모르는 형식이면 같은 헤더를 2번 연속 받아야 사용
+              (보드가 5초마다 헤더를 다시 보내므로, 글자가 깨진 헤더는 연속으로 같게 나오지 않음)
+      - 행: 숫자 필드가 숫자가 아니거나, data 값 개수 ≠ len 이면 저장하지 않고 '손상 행'으로 센다
+      - 열 구성이 바뀌면(펌웨어 교체 등) 같은 파일에 헤더를 섞지 않고 <rx>_2.csv 로 새 파일을 연다
+      - STATS 줄은 <rx>_stats.csv 에 따로 저장한다
+    """
 
     def __init__(self, name: str, line_source, out_dir: Path, shared: Shared) -> None:
         super().__init__(daemon=True, name=name)
@@ -128,11 +156,18 @@ class RxWorker(threading.Thread):
         self.lines = line_source
         self.shared = shared
         self.stats = Stats()
+        self.out_dir = out_dir
         self.columns: list[str] | None = None
+        self.header_candidate: list[str] | None = None
+        self.part = 1
         self.path = out_dir / f"{safe_name(name)}.csv"
         self.file = open(self.path, "w", newline="", encoding="utf-8")
         self.writer = csv.writer(self.file)
         self.header_written: list[str] | None = None
+        self.bad_rows_total = 0
+        self.stats_path = out_dir / f"{safe_name(name)}_stats.csv"
+        self.stats_file = None  # STATS 줄이 처음 올 때 연다 (시뮬레이터는 STATS 없음)
+        self.stats_writer = None
 
     def run(self) -> None:
         try:
@@ -145,12 +180,17 @@ class RxWorker(threading.Thread):
         finally:
             self.file.flush()
             self.file.close()
+            if self.stats_file:
+                self.stats_file.close()
 
     def handle_line(self, line: str) -> None:
         if not line:
             return
         if line.startswith("type,"):  # 보드가 보낸 헤더
-            self.columns = line.split(",")
+            self.handle_header(line.split(","))
+            return
+        if line.startswith("STATS,"):
+            self.handle_stats(line)
             return
         if not line.startswith("CSI_DATA"):
             return  # 부팅 로그 등은 무시
@@ -170,19 +210,80 @@ class RxWorker(threading.Thread):
         row = dict(zip(cols, fields))
         row.pop("type", None)
 
+        if not row_is_valid(row):
+            self.stats.bad_rows += 1
+            self.bad_rows_total += 1
+            return
+
         seq = next((to_int(row[k]) for k in SEQ_KEYS if k in row), None)
-        data = row.get("data", "")
-        n_values = data.count(",") + 1 if data.startswith("[") else None
+        n_values = row["data"].count(",") + 1 if "data" in row else None
         self.stats.update(seq, to_int(row.get("rssi")), n_values)
 
         with self.shared.lock:
             label = self.shared.label
 
         keys = list(row.keys())
-        if self.header_written != keys:  # 첫 행(또는 형식 변경 시) 헤더 기록
+        if self.header_written is None:
+            self.writer.writerow(["pc_time", "label", "rx", *keys])
+            self.header_written = keys
+        elif self.header_written != keys:  # 열 구성 변경 → 새 파일
+            self.open_next_part()
             self.writer.writerow(["pc_time", "label", "rx", *keys])
             self.header_written = keys
         self.writer.writerow([f"{time.time():.6f}", label, self.rx_name, *row.values()])
+
+    def handle_header(self, cols: list[str]) -> None:
+        if cols in DEFAULT_FORMATS.values() or cols == self.columns:
+            self.columns = cols
+            self.header_candidate = None
+        elif cols == self.header_candidate:  # 모르는 형식이 2번 연속 같게 옴 → 새 형식으로 인정
+            self.columns = cols
+            self.header_candidate = None
+        else:
+            self.header_candidate = cols
+            self.stats.bad_headers += 1
+
+    def handle_stats(self, line: str) -> None:
+        values = {}
+        for item in line.split(",")[1:]:
+            key, sep, val = item.partition("=")
+            if sep and key in STATS_KEYS:
+                values[key] = val
+        if self.stats_writer is None:
+            self.stats_file = open(self.stats_path, "w", newline="", encoding="utf-8")
+            self.stats_writer = csv.writer(self.stats_file)
+            self.stats_writer.writerow(["pc_time", "rx", *STATS_KEYS, "raw"])
+        # 키가 깨진 항목은 빈칸이 되고, 원문은 raw 열에 남는다
+        self.stats_writer.writerow([f"{time.time():.6f}", self.rx_name,
+                                    *(values.get(k, "") for k in STATS_KEYS), line])
+        self.stats_file.flush()
+
+    def open_next_part(self) -> None:
+        self.file.close()
+        self.part += 1
+        self.path = self.out_dir / f"{safe_name(self.rx_name)}_{self.part}.csv"
+        self.file = open(self.path, "w", newline="", encoding="utf-8")
+        self.writer = csv.writer(self.file)
+        print(f"\n[{self.rx_name}] 열 구성이 바뀌어 새 파일로 저장: {self.path.name}")
+
+
+INT_KEYS = ("id", "seq", "rssi", "len", "first_word", "local_timestamp")
+DATA_RE = re.compile(r"\[-?\d+(?:,-?\d+)*\]")
+
+
+def row_is_valid(row: dict[str, str]) -> bool:
+    """시리얼 바이트 손실로 깨진 행을 거른다. (id 숫자가 다른 숫자로 바뀐 경우는 못 잡음)"""
+    for k in INT_KEYS:
+        if k in row and to_int(row[k]) is None:
+            return False
+    data = row.get("data")
+    if data is None:
+        return True
+    if not DATA_RE.fullmatch(data):  # 괄호·쉼표·정수 형식 (숫자가 통째로 빠져 '-'나 빈칸이 된 경우 포함)
+        return False
+    n_values = data.count(",") + 1
+    n_len = to_int(row.get("len"))
+    return n_len is None or n_values == n_len
 
 
 def safe_name(name: str) -> str:
@@ -256,8 +357,9 @@ def simulated_lines(shared: Shared, hz: float = 100.0, n_sub: int = 64, drop: fl
 def main() -> None:
     ap = argparse.ArgumentParser(description="ESP32 CSI 시리얼 로거")
     ap.add_argument("--port", nargs="+", help="시리얼 포트 (여러 개 가능, 예: COM5 COM6)")
-    ap.add_argument("--baud", type=int, default=921600, help="보레이트 (RX 펌웨어 설정과 동일하게)")
-    ap.add_argument("--out", default="logs", help="저장 폴더")
+    ap.add_argument("--baud", type=int, default=2000000,
+                    help="보레이트 (RX 펌웨어 설정과 동일하게. firmware/rx = 2000000)")
+    ap.add_argument("--out", default=str(DEFAULT_OUT), help="저장 폴더 (기본: 저장소의 data/)")
     ap.add_argument("--label", default="unlabeled", help="시작 라벨")
     ap.add_argument("--stats", type=float, default=5.0, help="통계 출력 주기(초)")
     ap.add_argument("--simulate", action="store_true", help="보드 없이 가짜 데이터로 실행")
@@ -320,7 +422,8 @@ def main() -> None:
         events_f.close()
         print("\n종료. 저장된 파일:")
         for w in workers:
-            print(f"  {w.path}  ({w.stats.total} 패킷, 손실 {w.stats.lost_total})")
+            print(f"  {w.path}  ({w.stats.total} 패킷, 손실 {w.stats.lost_total}, "
+                  f"손상 행 {w.bad_rows_total})")
 
 
 if __name__ == "__main__":
