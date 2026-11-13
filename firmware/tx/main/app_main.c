@@ -14,7 +14,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <stdatomic.h>
 
 #include "freertos/FreeRTOS.h"
@@ -200,6 +199,13 @@ void app_main()
 
     xTaskCreate(tx_stats_task, "tx_stats", 3072, NULL, 1, NULL);
 
+    /* 송신 시각 기준으로 주기를 맞춘다. 원본의 usleep(10ms)은 송신 처리 시간이 더해져
+     * 실측 약 91Hz였다. vTaskDelayUntil은 처리 시간과 무관하게 10 tick(=10ms) 간격을 유지한다. */
+    _Static_assert(configTICK_RATE_HZ % CONFIG_SEND_FREQUENCY == 0,
+                   "CONFIG_FREERTOS_HZ must be a multiple of CONFIG_SEND_FREQUENCY for an exact period");
+    const TickType_t period = configTICK_RATE_HZ / CONFIG_SEND_FREQUENCY;
+    TickType_t last_wake = xTaskGetTickCount();
+
     for (uint32_t count = 0; ; ++count) {
         esp_err_t ret = esp_now_send(peer.peer_addr, (const uint8_t *)&count, sizeof(count));
         atomic_fetch_add(&s_send_calls, 1);
@@ -208,6 +214,6 @@ void app_main()
             ESP_LOGW(TAG, "free_heap: %ld <%s> ESP-NOW send error", esp_get_free_heap_size(), esp_err_to_name(ret));
         }
 
-        usleep(1000 * 1000 / CONFIG_SEND_FREQUENCY);
+        vTaskDelayUntil(&last_wake, period);
     }
 }

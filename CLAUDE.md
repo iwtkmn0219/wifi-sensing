@@ -59,8 +59,10 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 | 절전 | `WIFI_PS_NONE` |
 
 - TX는 `csi_send` 예제(esp-csi `8633d67`)를 `firmware\tx`에 복사해 쓴다. `esp-csi\` 안에서 빌드하지 않는다.
-- 원본에서 바꾼 것은 **송신 통계 로그뿐**이다(계약값 무관). 5초마다 `tx_stats: send .. Hz, on-air .. Hz, send_err .., cb_fail ..`를 출력한다.
-- 실측(2026-10-27, COM4): 송신 **약 91Hz**(목표 100Hz), send_err·cb_fail 0. `usleep(10ms)` + 송신 처리 시간으로 주기가 약 11ms가 되는 것으로 추정한다. 100Hz가 필요하면 `vTaskDelayUntil` 방식으로 바꾼다(RX·PC 수정 불필요).
+- 원본에서 바꾼 것은 두 가지다(계약값 무관).
+  - **송신 통계 로그**: 5초마다 `tx_stats: send .. Hz, on-air .. Hz, send_err .., cb_fail ..`를 출력한다.
+  - **송신 주기 방식**(2026-11-13): `usleep(10ms)` → `vTaskDelayUntil`(10 tick = 10ms). 보드 실측 전.
+- 이전 실측(2026-10-27, COM4, `usleep` 방식): 송신 **약 91Hz**(목표 100Hz), send_err·cb_fail 0. 송신 처리 시간이 더해져 주기가 약 11ms가 된 것으로 추정해 방식을 바꿨다. RX·PC는 수정하지 않는다(RX 출력은 약 10% 증가).
 
 ## RX 출력 → PC 인터페이스
 - 헤더 줄(`type,id,mac,...`)을 부팅 때 1회 + 5초마다 다시 출력하고, 패킷마다 `CSI_DATA,...,len,first_word,"[v0,v1,...]"` 1줄을 출력한다. (`firmware/rx`)
@@ -95,6 +97,7 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 - [x] PC 도구 손상 대응 — 로거(헤더·행 검증, STATS 저장, 기본 2M·data\), csi_io(손상 행 제외, LLTF/HT-LTF 구간·null 서브캐리어), rx_stats(반복 헤더·손상 id) — 2026-11-13
 - [ ] 보레이트·전송 주기 확정 — 50Hz+921600 / 100Hz(`vTaskDelayUntil`)+2M 중 선택(`fall` 범위 여부). 2M은 CSI 행 손상 11.3%, 100Hz면 RX 출력 10% 증가
 - [ ] 무선 손실 28.7% 원인 조사 — 같은 시각 TX on-air Hz 대조, HT20/HT40·채널·배치 비교 (TX·RX 동시 변경)
+- [x] TX 100Hz 유지, 주기 방식을 `vTaskDelayUntil`로 변경 (2026-11-13, 빌드 확인 / 보드 실측 전 — `tx_stats` 약 100Hz 확인 필요)
 - [ ] RX 출력 형식 확정 — 현재 csi_recv long format 그대로, `rx_id`는 로거 `rx`(포트) 열로 대체 중
 - [ ] 움직임 판별 → 호흡 검출 → 상태 머신 → 알림(텔레그램 등, 이후 AWS IoT Core/Lambda/SNS 확장)
 - [ ] 보드 2대 추가 도착 후 RX2(출입문) 구성, 다중 RX를 `id` 기준으로 정렬
