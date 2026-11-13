@@ -28,7 +28,7 @@ TX는 CSI를 계산하지 않습니다. **같은 채널, 같은 MAC, 일정한 �
 `IDF_v5.5.6_Powershell` 터미널에서 실행합니다. 일반 PowerShell에서는 `idf.py`가 동작하지 않습니다.
 
 ```powershell
-cd C:\esp\wifi-sensing\firmware\tx
+cd E:\esp\wifi-sensing\firmware\tx
 idf.py build
 idf.py -p COMx erase-flash         # 새 보드 최초 1회
 idf.py -p COMx flash monitor       # 모니터 종료: Ctrl+]

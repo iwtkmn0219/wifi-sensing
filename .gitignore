@@ -6,3 +6,4 @@ __pycache__/
 managed_components/
 .claude/worktrees/
 .vscode
+logs/

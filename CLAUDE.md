@@ -16,19 +16,19 @@ ESP32 Wi-Fi CSI로 원룸 안의 **움직임·재실·호흡**을 비접촉으�
 
 ## 디렉터리
 ```
-C:\esp\
+E:\esp\
 ├─ esp-csi\            # Espressif 공식 저장소. 참고 전용, 절대 수정하지 않음
 └─ wifi-sensing\       # 이 저장소
    ├─ firmware\tx\     # csi_send 복사본, 여기서 빌드 (담당: 민준)
    ├─ firmware\rx\     # csi_recv 기반 (담당: 팀원)
    ├─ pc\              # csi_logger.py, csi_io.py, 분석 코드
-   ├─ data\            # 수집 로그 (git 제외, RX 1대당 약 200MB/시간)
+   ├─ data\            # 수집 로그 (git 제외, RX 1대당 약 300MB/시간, 100Hz 기준)
    └─ docs\            # 인수인계 문서
 ```
 
 ## 환경
 - Windows, **ESP-IDF v5.5.6** (EIM으로 설치). 터미널은 `IDF_v5.5.6_Powershell`에서만 `idf.py`가 동작한다.
-- 경로에 한글·공백·괄호를 쓰지 않는다 (`C:\esp` 아래만 사용).
+- 경로에 한글·공백·괄호를 쓰지 않는다 (`E:\esp` 아래만 사용. ESP-IDF는 `E:\esp\v5.5.6\esp-idf`, 도구는 `C:\Espressif\tools`).
 - 타겟은 `esp32`다. TX 보드(COM4, CH340)는 부팅 로그로 **ESP32 rev v3.1, 플래시 4MB**임을 확인했다(2026-10-27). RX 보드 모델은 팀원이 확인해야 한다.
 - v6.x로 올리지 않는다. 예제와 esp-radar 호환을 위해 v5.4 이상, v6 미만을 유지한다.
 
@@ -43,7 +43,8 @@ idf.py -p COMx flash monitor      # 모니터 종료: Ctrl+]
 # PC (pc\에서) — 실행 전 idf.py monitor를 반드시 닫을 것 (포트 독점)
 pip install -r requirements.txt
 python csi_logger.py --simulate                  # 보드 없이 테스트
-python csi_logger.py --port COM5 --baud 2000000 --out ..\data   # RX 펌웨어가 2M. RX 여러 대: --port COM5 COM6
+python csi_logger.py --port COM5                 # 기본 2M·저장소 data\<세션>\. RX 여러 대: --port COM5 COM6
+python rx_stats.py ..\data\<세션>\*.csv          # 수신 Hz·손실률·시리얼 손상·보드 STATS 요약
 python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래프 PNG
 ```
 
@@ -63,12 +64,14 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 
 ## RX 출력 → PC 인터페이스
 - 헤더 줄(`type,id,mac,...`)을 부팅 때 1회 + 5초마다 다시 출력하고, 패킷마다 `CSI_DATA,...,len,first_word,"[v0,v1,...]"` 1줄을 출력한다. (`firmware/rx`)
-- `STATS,...` 줄(5초마다)은 진단용이며 로거가 무시한다. `queue_drop`=시리얼 병목, `seq_lost`=무선 손실.
+- `STATS,...` 줄(5초마다)은 진단용이며 로거가 `<rx>_stats.csv`에 따로 저장한다. `queue_drop`=시리얼 병목, `seq_lost`=무선 손실.
+- 로거는 시리얼 손상(2M에서 실측)을 거른다: 알려진 형식이 아닌 헤더는 2번 연속 같아야 인정, `data`가 정수 배열 형식이 아니거나 값 개수 ≠ `len`인 행은 저장하지 않음. `id` 숫자가 다른 숫자로 바뀐 손상은 못 잡는다(`rx_stats.py`가 손실 계산에서만 제외).
 - ESP32 long format은 25필드이고, C5/C6 short format은 15필드다.
 - `csi_logger.py`는 헤더 줄로 필드를 매핑한다. 헤더를 못 받으면 필드 개수로 추정한다. → **필드를 추가하면 헤더도 반드시 같이 출력**한다.
 - CSI 원시값은 서브캐리어마다 `[허수, 실수]` 순서다. `first_word == 1`이면 앞 서브캐리어 2개가 무효다.
 - 콜백 안에서 직접 출력하지 말고, 큐에 넣은 뒤 별도 태스크에서 출력한다.
-- 921600bps는 100Hz 텍스트 출력에 부족한 것으로 추정된다(csi_recv 예제 실측 68.9Hz·손실 24.8%, `firmware/rx/README.md` 측정 기록). 다음 단계는 보레이트 2M → 필요 시 LLTF만 출력, 바이너리, UDP 순으로 검토한다.
+- 921600bps는 전체 CSI(한 줄 약 1.3KB)를 91~100Hz로 보내기에 부족하다(필요 약 1.2~1.3Mbps, 실측 저장률 71.5Hz에서 막힘). 2M은 대역폭은 충분하지만(`queue_drop` 0) PC 수신에서 바이트가 빠져 CSI 행 약 11%가 손상된다(2026-11-13 실측, `firmware/rx/README.md`). 대안: 50Hz+921600, LLTF만 출력, 줄 체크섬, 바이너리, UDP.
+- 데이터 양은 100Hz·전체 CSI 기준 RX 1대당 약 300MB/시간(실측 3분 14.8MB).
 
 ## 실험 배치
 - **침대를 TX와 RX1 사이에** 둔다.
@@ -82,8 +85,10 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 - [x] 구상, ESP-IDF v5.5.6 설치, TX(`csi_send`) 플래시·동작 확인
 - [x] PC 로거와 퀵룩 도구 (시뮬레이션으로 검증)
 - [x] RX 수신 확인 (csi_recv 예제, 921600): 68.9Hz, 손실 24.79%, RSSI −61dBm, CSI 384B(192 서브캐리어) — 시리얼 병목 추정, TX 실제 주기 약 91Hz
-- [x] RX 펌웨어 `firmware/rx` 작성 (큐+출력 태스크, STATS, csi_recv와 같은 출력 형식). 빌드 확인, 보드 실측 전
-- [ ] `firmware/rx` 실측 → 921600 vs 2M 비교, 보레이트 확정
+- [x] RX 펌웨어 `firmware/rx` 작성 (큐+출력 태스크, STATS, csi_recv와 같은 출력 형식). 빌드·보드 실측 완료
+- [x] `firmware/rx` 실측 921600(71.5Hz) vs 2M(64.4Hz, `queue_drop` 0, 무선 손실 28.7%) — 2026-11-13
+- [x] PC 도구 손상 대응 — 로거(헤더·행 검증, STATS 저장, 기본 2M·data\), csi_io(손상 행 제외, LLTF/HT-LTF 구간·null 서브캐리어), rx_stats(반복 헤더·손상 id) — 2026-11-13
+- [ ] 보레이트·전송 주기 확정 — 2M은 CSI 행 손상 11.3%. 50Hz+921600 / 100Hz+2M 중 선택(`fall` 범위 여부). 무선 손실 28.7% 원인 조사(HT20/HT40·채널·배치)
 - [ ] RX 출력 형식 확정 — 현재 csi_recv long format 그대로, `rx_id`는 로거 `rx`(포트) 열로 대체 중
 - [ ] 움직임 판별 → 호흡 검출 → 상태 머신 → 알림(텔레그램 등, 이후 AWS IoT Core/Lambda/SNS 확장)
 - [ ] 보드 2대 추가 도착 후 RX2(출입문) 구성, 다중 RX를 `id` 기준으로 정렬
