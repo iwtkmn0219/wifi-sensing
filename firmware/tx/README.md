@@ -1,6 +1,6 @@
 # TX — CSI 송신기
 
-> 담당: 민준 · 기반: esp-csi `examples/get-started/csi_send` (esp-csi `8633d67` 복사 + 송신 통계 로그 추가, 동작 확인 완료)
+> 담당: 민준 · 기반: esp-csi `examples/get-started/csi_send` (esp-csi `8633d67` 복사 + 송신 통계 로그 추가 + 송신 주기 `vTaskDelayUntil` 방식)
 > 보드: ESP32 rev v3.1, 플래시 4MB, CH340 USB-시리얼 (부팅 로그로 확인)
 
 일정한 주기로 ESP-NOW 패킷을 브로드캐스트해서 RX가 CSI를 측정할 수 있게 합니다.
@@ -42,6 +42,7 @@ idf.py -p COMx flash monitor       # 모니터 종료: Ctrl+]
 ```
 I (5679) csi_send: tx_stats: send 91.0 Hz, on-air 91.0 Hz, send_err 0, cb_fail 0
 ```
+(위는 `usleep` 방식일 때의 실측 예시입니다. 현재 방식에서는 약 100Hz가 나와야 합니다.)
 
 | 필드 | 의미 |
 |---|---|
@@ -57,7 +58,8 @@ I (5679) csi_send: tx_stats: send 91.0 Hz, on-air 91.0 Hz, send_err 0, cb_fail 0
 
 ## 알려진 사항
 
-- **실제 주기 약 91Hz** (2026-10-27 실측, 20초간 90.8~91.0Hz, 오류 0): 송신 후 `usleep(10ms)`로 대기하므로 송신 처리 시간만큼 주기가 늘어나는 것으로 추정합니다. 100Hz가 필요하면 `vTaskDelayUntil` 방식으로 바꿉니다. 주기만 바꾸는 것이므로 RX와 PC는 수정하지 않아도 됩니다.
+- **송신 주기 방식 변경** (2026-11-13): 원본은 송신 후 `usleep(10ms)`로 대기해서 실제 주기가 **약 91Hz**였습니다(2026-10-27 실측, 20초간 90.8~91.0Hz, 오류 0). 송신 처리 시간만큼 주기가 늘어난 것으로 추정합니다. 지금은 `vTaskDelayUntil`로 마지막 깨어난 시각 기준 10 tick(`FREERTOS_HZ=1000`이므로 10ms)마다 보냅니다. 플래시 후 `tx_stats`가 약 100Hz인지 확인이 필요합니다(**보드 실측 전**). 주기만 바뀌므로 RX와 PC는 수정하지 않습니다(RX 출력은 약 10% 증가).
+  - `CONFIG_SEND_FREQUENCY`를 바꿀 때는 1000의 약수여야 합니다(아니면 빌드 오류).
 - **재부팅**: TX를 재부팅하면 `count`가 0부터 다시 시작합니다. PC 로거에는 `seq 리셋`으로 표시되고, 데이터는 정상입니다.
 
 ## 배치

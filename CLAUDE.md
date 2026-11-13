@@ -58,8 +58,10 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 | 절전 | `WIFI_PS_NONE` |
 
 - TX는 `csi_send` 예제(esp-csi `8633d67`)를 `firmware\tx`에 복사해 쓴다. `esp-csi\` 안에서 빌드하지 않는다.
-- 원본에서 바꾼 것은 **송신 통계 로그뿐**이다(계약값 무관). 5초마다 `tx_stats: send .. Hz, on-air .. Hz, send_err .., cb_fail ..`를 출력한다.
-- 실측(2026-10-27, COM4): 송신 **약 91Hz**(목표 100Hz), send_err·cb_fail 0. `usleep(10ms)` + 송신 처리 시간으로 주기가 약 11ms가 되는 것으로 추정한다. 100Hz가 필요하면 `vTaskDelayUntil` 방식으로 바꾼다(RX·PC 수정 불필요).
+- 원본에서 바꾼 것은 두 가지다(계약값 무관).
+  - **송신 통계 로그**: 5초마다 `tx_stats: send .. Hz, on-air .. Hz, send_err .., cb_fail ..`를 출력한다.
+  - **송신 주기 방식**(2026-11-13): `usleep(10ms)` → `vTaskDelayUntil`(10 tick = 10ms). 보드 실측 전.
+- 이전 실측(2026-10-27, COM4, `usleep` 방식): 송신 **약 91Hz**(목표 100Hz), send_err·cb_fail 0. 송신 처리 시간이 더해져 주기가 약 11ms가 된 것으로 추정해 방식을 바꿨다. RX·PC는 수정하지 않는다(RX 출력은 약 10% 증가).
 
 ## RX 출력 → PC 인터페이스
 - 헤더 줄(`type,id,mac,...`)을 부팅 때 1회 + 5초마다 다시 출력하고, 패킷마다 `CSI_DATA,...,len,first_word,"[v0,v1,...]"` 1줄을 출력한다. (`firmware/rx`)
@@ -88,8 +90,10 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
   - RX(`rx_stats.py`): 153.2s, **71.5Hz**, 손실(id) **21.34%**(2972개), RSSI −50.1dBm(−80/−44), 간격 median 11.56ms, CSI 384B
   - 같은 구간 TX `tx_stats`: on-air 평균 **90.9Hz**, 오류·재부팅 0 → 예상 송신 13,926 ≈ RX 수신+손실 13,928. TX는 전부 송신, 손실은 RX 쪽
   - 해석(추정): 921600bps 실효 약 92KB/s ÷ 71.5Hz ≈ 1.29KB/줄 = 측정된 줄 길이 → **시리얼 병목**. RX `STATS`의 `queue_drop`으로 확정 필요
-- [ ] RX 시리얼 병목 해소 → 보레이트 2M(약 155Hz 감당) 또는 LLTF만 출력(약 170Hz) 중 결정 (RX 담당, TX 변경 없음)
-- [ ] TX 91Hz 유지 vs `vTaskDelayUntil`로 100Hz — RX 병목 해소 후 결정 (100Hz면 RX 출력 10% 증가)
+- [x] RX 보레이트 2M 적용 (`3bf3b24`). 팀원 확인 결과(2026-11-13 전달, 측정 시간 미상): 로거 손실 약 28%, `queue_drop` 거의 0, `seq_lost` 약 4600, 로거 파싱 실패 다수
+  - 해석: RX 내부 시리얼 병목은 해소. 남은 손실은 **무선 구간(`seq_lost`)** + **시리얼→PC 줄 깨짐(파싱 실패)** 두 가지로 추정
+- [ ] 손실 원인 진단 — 측정 시간·`loss_pct`·파싱 실패 수로 비중 산출 / 921600 비교로 2M 링크 문제 확인 / TX–RX 1m 근접 측정·채널 혼잡 확인
+- [x] TX 100Hz 유지, 주기 방식을 `vTaskDelayUntil`로 변경 (2026-11-13, 빌드 확인 / 보드 실측 전 — `tx_stats` 약 100Hz 확인 필요)
 - [ ] RX 출력 형식 확정 — 현재 csi_recv long format 그대로, `rx_id`는 로거 `rx`(포트) 열로 대체 중
 - [ ] 움직임 판별 → 호흡 검출 → 상태 머신 → 알림(텔레그램 등, 이후 AWS IoT Core/Lambda/SNS 확장)
 - [ ] 보드 2대 추가 도착 후 RX2(출입문) 구성, 다중 RX를 `id` 기준으로 정렬
