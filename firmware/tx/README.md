@@ -16,12 +16,13 @@ TX는 CSI를 계산하지 않습니다. **같은 채널, 같은 MAC, 일정한 �
 |---|---|
 | 채널 | 11 (`CONFIG_LESS_INTERFERENCE_CHANNEL`) |
 | 송신 MAC | `1a:00:00:00:00:00` (`esp_wifi_set_mac`으로 고정, 보드 고유 MAC 아님) |
-| 방식 | ESP-NOW 브로드캐스트 `FF:FF:FF:FF:FF:FF`, 100Hz |
+| 방식 | ESP-NOW 브로드캐스트 `FF:FF:FF:FF:FF:FF`, **50Hz** (`CONFIG_SEND_FREQUENCY`) |
 | 속도 | MCS0 LGI, phymode HT40 (`esp_now_set_peer_rate_config`) |
 | 페이로드 | `uint32_t count` = 시퀀스 번호 → RX 출력의 `id` 필드 |
 | 절전 | `WIFI_PS_NONE` |
 
 채널·MAC·대역폭은 TX만 바꾸면 안 됩니다. RX 펌웨어도 같이 바꿔야 합니다.
+송신 주파수는 RX 시리얼 보레이트와 짝입니다: **50Hz ↔ 921600**(현재), 100Hz ↔ 2M. 바꿀 때는 RX 보레이트와 PC 로거 `--baud`도 함께 바꿉니다.
 
 ## 빌드 · 플래시
 
@@ -35,14 +36,16 @@ idf.py -p COMx flash monitor       # 모니터 종료: Ctrl+]
 ```
 
 - `sdkconfig`가 커밋되어 있고 타겟이 이미 `esp32`이므로 `set-target`은 하지 않아도 됩니다. 실행하면 `sdkconfig`가 `sdkconfig.defaults` 기준으로 다시 만들어집니다.
-- 정상 부팅 시 `csi_send: wifi_channel: 11, send_frequency: 100, mac: 1a:00:00:00:00:00`가 나오고, 이후 5초마다 송신 통계가 나옵니다.
+- 정상 부팅 시 `csi_send: wifi_channel: 11, send_frequency: 50, mac: 1a:00:00:00:00:00`가 나오고, 이후 5초마다 송신 통계가 나옵니다.
+- `send_frequency`는 **설정값 상수**라 실제 송신 주기가 아닙니다. 실제 주기는 `tx_stats`의 `send`/`on-air`를 봅니다.
+- 플래시가 됐는지는 RX 쪽에서도 확인할 수 있습니다. TX가 재부팅되면 RX의 `id`가 0부터 다시 시작합니다(같은 MAC을 쓰는 다른 TX가 켜져 있으면 구분되지 않으니 주의).
 
 ## 송신 통계 로그 (원본에 추가한 부분)
 
 ```
 I (5679) csi_send: tx_stats: send 91.0 Hz, on-air 91.0 Hz, send_err 0, cb_fail 0
 ```
-(위는 `usleep` 방식일 때의 실측 예시입니다. 현재 방식에서는 약 100Hz가 나와야 합니다.)
+(위는 `usleep` 방식일 때의 실측 예시입니다. 현재 설정에서는 약 50Hz가 나와야 합니다.)
 
 | 필드 | 의미 |
 |---|---|
@@ -58,8 +61,9 @@ I (5679) csi_send: tx_stats: send 91.0 Hz, on-air 91.0 Hz, send_err 0, cb_fail 0
 
 ## 알려진 사항
 
-- **송신 주기 방식 변경** (2026-11-13): 원본은 송신 후 `usleep(10ms)`로 대기해서 실제 주기가 **약 91Hz**였습니다(2026-10-27 실측, 20초간 90.8~91.0Hz, 오류 0). 송신 처리 시간만큼 주기가 늘어난 것으로 추정합니다. 지금은 `vTaskDelayUntil`로 마지막 깨어난 시각 기준 10 tick(`FREERTOS_HZ=1000`이므로 10ms)마다 보냅니다. 플래시 후 `tx_stats`가 약 100Hz인지 확인이 필요합니다(**보드 실측 전**). 주기만 바뀌므로 RX와 PC는 수정하지 않습니다(RX 출력은 약 10% 증가).
+- **송신 주기 방식 변경** (2026-11-13): 원본은 송신 후 `usleep(10ms)`로 대기해서 실제 주기가 **약 91Hz**였습니다(2026-10-27 실측, 20초간 90.8~91.0Hz, 오류 0). 송신 처리 시간만큼 주기가 늘어난 것으로 추정합니다. 지금은 `vTaskDelayUntil`로 마지막 깨어난 시각 기준 `1000 / CONFIG_SEND_FREQUENCY` tick(`FREERTOS_HZ=1000`)마다 보냅니다. 100Hz 설정에서 RX `id`·보드 시각 기준 **100.00Hz, 간격 10.00ms**를 확인했습니다(2026-11-13, 세션 `20261113_174751`).
   - `CONFIG_SEND_FREQUENCY`를 바꿀 때는 1000의 약수여야 합니다(아니면 빌드 오류).
+- **송신 주파수 50Hz** (2026-11-13, 브랜치 `rate-50hz-921600`): RX를 921600으로 낮추기 위해 100Hz → 50Hz. 2M에서는 PC 수신 바이트 손실로 CSI 행 약 11%가 손상되었고, 921600은 50Hz 전체 CSI를 약 71% 부하로 보낼 수 있습니다(계산값). RX 기준 **50.00Hz, 간격 20.00ms**, 시리얼 손상 0을 확인했습니다(2026-11-13, 세션 `20261113_181550`).
 - **재부팅**: TX를 재부팅하면 `count`가 0부터 다시 시작합니다. PC 로거에는 `seq 리셋`으로 표시되고, 데이터는 정상입니다.
 
 ## 배치
@@ -73,4 +77,4 @@ I (5679) csi_send: tx_stats: send 91.0 Hz, on-air 91.0 Hz, send_err 0, cb_fail 0
 | 증상 | 확인할 것 |
 |---|---|
 | RX에 패킷이 전혀 안 들어옴 | TX 전원과 부팅 로그, RX와 채널·MAC이 일치하는지 |
-| 수신 Hz가 100보다 크게 낮음 | 위 "실제 주기" 항목, TX–RX 거리, 채널 혼잡(채널 변경은 TX/RX 동시) |
+| 수신 Hz가 송신 주파수(50Hz)보다 크게 낮음 | RX `STATS`의 `seq_lost`(무선)·`queue_drop`(시리얼), TX–RX 거리, 채널 혼잡(채널 변경은 TX/RX 동시) |

@@ -2,10 +2,10 @@
 CSI 로거 — esp-csi `csi_recv` 시리얼 출력을 CSV로 저장하고, 시나리오 라벨을 붙인다.
 
 사용 예
-    # 실제 보드 (idf.py monitor는 반드시 종료한 뒤 실행). 기본 보레이트 2M = firmware/rx
+    # 실제 보드 (idf.py monitor는 반드시 종료한 뒤 실행). 기본 보레이트 921600 = firmware/rx
     python csi_logger.py --port COM5
     python csi_logger.py --port COM5 COM6                    # RX 여러 대
-    python csi_logger.py --port COM5 --baud 921600           # csi_recv 예제 등 다른 펌웨어
+    python csi_logger.py --port COM5 --baud 2000000          # RX를 2M으로 빌드한 경우
 
     # 보드 없이 테스트 (가짜 CSI 생성, 0.25Hz 호흡 신호 포함)
     python csi_logger.py --simulate
@@ -322,7 +322,7 @@ def serial_lines(port: str, baud: int, shared: Shared):
         ser.close()
 
 
-def simulated_lines(shared: Shared, hz: float = 100.0, n_sub: int = 64, drop: float = 0.01):
+def simulated_lines(shared: Shared, hz: float = 50.0, n_sub: int = 64, drop: float = 0.01):
     """csi_recv(ESP32 long format)를 흉내 낸 가짜 데이터.
     호흡(0.25Hz)은 항상 약하게, 라벨에 'walk'가 들어가면 큰 움직임 잡음을 섞는다."""
     rng = random.Random(0)
@@ -357,8 +357,8 @@ def simulated_lines(shared: Shared, hz: float = 100.0, n_sub: int = 64, drop: fl
 def main() -> None:
     ap = argparse.ArgumentParser(description="ESP32 CSI 시리얼 로거")
     ap.add_argument("--port", nargs="+", help="시리얼 포트 (여러 개 가능, 예: COM5 COM6)")
-    ap.add_argument("--baud", type=int, default=2000000,
-                    help="보레이트 (RX 펌웨어 설정과 동일하게. firmware/rx = 2000000)")
+    ap.add_argument("--baud", type=int, default=921600,
+                    help="보레이트 (RX 펌웨어 설정과 동일하게. firmware/rx = 921600)")
     ap.add_argument("--out", default=str(DEFAULT_OUT), help="저장 폴더 (기본: 저장소의 data/)")
     ap.add_argument("--label", default="unlabeled", help="시작 라벨")
     ap.add_argument("--stats", type=float, default=5.0, help="통계 출력 주기(초)")
