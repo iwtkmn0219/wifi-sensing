@@ -22,7 +22,7 @@ E:\esp\
    ├─ firmware\tx\     # csi_send 복사본, 여기서 빌드 (담당: 민준)
    ├─ firmware\rx\     # csi_recv 기반 (담당: 팀원)
    ├─ pc\              # csi_logger.py, csi_io.py, 분석 코드
-   ├─ data\            # 수집 로그 (git 제외, RX 1대당 약 300MB/시간, 100Hz 기준)
+   ├─ data\            # 수집 로그 (git 제외, RX 1대당 약 150MB/시간, 50Hz 기준)
    └─ docs\            # 인수인계 문서
 ```
 
@@ -43,7 +43,7 @@ idf.py -p COMx flash monitor      # 모니터 종료: Ctrl+]
 # PC (pc\에서) — 실행 전 idf.py monitor를 반드시 닫을 것 (포트 독점)
 pip install -r requirements.txt
 python csi_logger.py --simulate                  # 보드 없이 테스트
-python csi_logger.py --port COM5                 # 기본 2M·저장소 data\<세션>\. RX 여러 대: --port COM5 COM6
+python csi_logger.py --port COM5                 # 기본 921600·저장소 data\<세션>\. RX 여러 대: --port COM5 COM6
 python rx_stats.py ..\data\<세션>\*.csv          # 수신 Hz·손실률·시리얼 손상·보드 STATS 요약
 python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래프 PNG
 ```
@@ -53,7 +53,8 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 |---|---|
 | 채널 | 11 (`CONFIG_LESS_INTERFERENCE_CHANNEL`) |
 | 송신 MAC | `1a:00:00:00:00:00` (`esp_wifi_set_mac`으로 고정, 보드 고유 MAC 아님) |
-| 방식 | ESP-NOW 브로드캐스트 `FF:FF:FF:FF:FF:FF`, 100Hz |
+| 방식 | ESP-NOW 브로드캐스트 `FF:FF:FF:FF:FF:FF`, **50Hz** (`CONFIG_SEND_FREQUENCY`, 2026-11-13에 100Hz에서 변경) |
+| RX 시리얼 | **921600bps** (`CONFIG_ESP_CONSOLE_UART_BAUDRATE`, PC 로거 `--baud` 기본값과 같음) |
 | 속도 | MCS0 LGI, phymode HT40 (`esp_now_set_peer_rate_config`) |
 | 페이로드 | `uint32_t count` = 시퀀스 번호 → RX 출력의 `id` 필드 |
 | 절전 | `WIFI_PS_NONE` |
@@ -61,8 +62,9 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 - TX는 `csi_send` 예제(esp-csi `8633d67`)를 `firmware\tx`에 복사해 쓴다. `esp-csi\` 안에서 빌드하지 않는다.
 - 원본에서 바꾼 것은 두 가지다(계약값 무관).
   - **송신 통계 로그**: 5초마다 `tx_stats: send .. Hz, on-air .. Hz, send_err .., cb_fail ..`를 출력한다.
-  - **송신 주기 방식**(2026-11-13): `usleep(10ms)` → `vTaskDelayUntil`(10 tick = 10ms). 보드 실측 전.
-- 이전 실측(2026-10-27, COM4, `usleep` 방식): 송신 **약 91Hz**(목표 100Hz), send_err·cb_fail 0. 송신 처리 시간이 더해져 주기가 약 11ms가 된 것으로 추정해 방식을 바꿨다. RX·PC는 수정하지 않는다(RX 출력은 약 10% 증가).
+  - **송신 주기 방식**(2026-11-13): `usleep(10ms)` → `vTaskDelayUntil`(`configTICK_RATE_HZ / CONFIG_SEND_FREQUENCY` tick). 100Hz에서 RX `id`·보드 시각 기준 **100.00Hz, 간격 10.00ms** 실측 확인(세션 `20261113_174751`).
+  - **송신 주파수 50Hz**(2026-11-13, 브랜치 `rate-50hz-921600`): RX를 921600으로 낮춰 2M 시리얼 손상(CSI 행 약 11%)을 피하기 위함. 보드 실측 전.
+- 이전 실측(2026-10-27, COM4, `usleep` 방식): 송신 **약 91Hz**(목표 100Hz), send_err·cb_fail 0. 송신 처리 시간이 더해져 주기가 약 11ms가 된 것으로 추정해 방식을 바꿨다.
 
 ## RX 출력 → PC 인터페이스
 - 헤더 줄(`type,id,mac,...`)을 부팅 때 1회 + 5초마다 다시 출력하고, 패킷마다 `CSI_DATA,...,len,first_word,"[v0,v1,...]"` 1줄을 출력한다. (`firmware/rx`)
@@ -72,8 +74,11 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 - `csi_logger.py`는 헤더 줄로 필드를 매핑한다. 헤더를 못 받으면 필드 개수로 추정한다. → **필드를 추가하면 헤더도 반드시 같이 출력**한다.
 - CSI 원시값은 서브캐리어마다 `[허수, 실수]` 순서다. `first_word == 1`이면 앞 서브캐리어 2개가 무효다.
 - 콜백 안에서 직접 출력하지 말고, 큐에 넣은 뒤 별도 태스크에서 출력한다.
-- 921600bps는 전체 CSI(한 줄 약 1.3KB)를 91~100Hz로 보내기에 부족하다(필요 약 1.2~1.3Mbps, 실측 저장률 71.5Hz에서 막힘). 2M은 대역폭은 충분하지만(`queue_drop` 0) PC 수신에서 바이트가 빠져 CSI 행 약 11%가 손상된다(2026-11-13 실측, `firmware/rx/README.md`). 대안: 50Hz+921600, LLTF만 출력, 줄 체크섬, 바이너리, UDP.
-- 데이터 양은 100Hz·전체 CSI 기준 RX 1대당 약 300MB/시간(실측 3분 14.8MB).
+- **현재 설정: 50Hz + 921600.** 전체 CSI(한 줄 약 1.3KB) × 50Hz ≈ 0.66Mbps로 921600의 약 71%(계산값, 실측 전).
+  - 921600은 91~100Hz 전체 CSI에 부족하다(필요 약 1.2~1.3Mbps, 실측 저장률 71.5Hz에서 막힘). 921600에서 CSI 행 손상은 0.08%.
+  - 2M은 대역폭은 충분하지만(`queue_drop` 0) PC 수신에서 바이트가 빠져 CSI 행 약 11%가 손상된다(2026-11-13 실측, `firmware/rx/README.md`).
+  - 100Hz로 되돌릴 때는 TX `CONFIG_SEND_FREQUENCY`, RX 보레이트(2M), 로거 `--baud`를 함께 바꾸고 줄 체크섬 또는 LLTF만 출력을 검토한다.
+- 데이터 양은 50Hz·전체 CSI 기준 RX 1대당 약 150MB/시간(100Hz 실측 3분 14.8MB의 절반으로 계산).
 
 ## 실험 배치
 - **침대를 TX와 RX1 사이에** 둔다.
@@ -95,9 +100,9 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
   - 해석(추정): 921600bps 실효 약 92KB/s ÷ 71.5Hz ≈ 1.29KB/줄 = 측정된 줄 길이 → **시리얼 병목**
 - [x] `firmware/rx` 2M 실측 (2026-11-13, 177s): 64.4Hz, **`queue_drop` 0**(RX 내부 시리얼 병목 해소), 무선 손실(`seq_lost`) 28.7%, RSSI −64.7dBm, PC 수신 바이트 손실로 CSI 행 11.3% 손상
 - [x] PC 도구 손상 대응 — 로거(헤더·행 검증, STATS 저장, 기본 2M·data\), csi_io(손상 행 제외, LLTF/HT-LTF 구간·null 서브캐리어), rx_stats(반복 헤더·손상 id) — 2026-11-13
-- [ ] 보레이트·전송 주기 확정 — 50Hz+921600 / 100Hz(`vTaskDelayUntil`)+2M 중 선택(`fall` 범위 여부). 2M은 CSI 행 손상 11.3%, 100Hz면 RX 출력 10% 증가
-- [ ] 무선 손실 28.7% 원인 조사 — 같은 시각 TX on-air Hz 대조, HT20/HT40·채널·배치 비교 (TX·RX 동시 변경)
-- [x] TX 100Hz 유지, 주기 방식을 `vTaskDelayUntil`로 변경 (2026-11-13, 빌드 확인 / 보드 실측 전 — `tx_stats` 약 100Hz 확인 필요)
+- [x] TX 주기 방식을 `vTaskDelayUntil`로 변경 (2026-11-13) — 100Hz에서 RX 기준 100.00Hz·간격 10.00ms 실측, 무선 손실(STATS) 6.31%, `queue_drop` 0
+- [ ] 50Hz + 921600 적용 (브랜치 `rate-50hz-921600`, 2026-11-13) — TX·RX 빌드 확인, **보드 실측 전**: TX 50.00Hz·간격 20.00ms, `queue_drop` 0, CSI 행 손상률 확인 필요
+- [ ] 무선 손실 원인 조사 — 배치에 따라 28.7%(RSSI −64.7) ~ 4~6%(RSSI −50~−54)로 변동. 같은 시각 TX on-air Hz 대조, HT20/HT40·채널·배치 비교 (TX·RX 동시 변경)
 - [ ] RX 출력 형식 확정 — 현재 csi_recv long format 그대로, `rx_id`는 로거 `rx`(포트) 열로 대체 중
 - [ ] 움직임 판별 → 호흡 검출 → 상태 머신 → 알림(텔레그램 등, 이후 AWS IoT Core/Lambda/SNS 확장)
 - [ ] 보드 2대 추가 도착 후 RX2(출입문) 구성, 다중 RX를 `id` 기준으로 정렬

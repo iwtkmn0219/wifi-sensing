@@ -41,7 +41,7 @@
 
 #define CONFIG_ESP_NOW_PHYMODE           WIFI_PHY_MODE_HT40
 #define CONFIG_ESP_NOW_RATE             WIFI_PHY_RATE_MCS0_LGI
-#define CONFIG_SEND_FREQUENCY               100
+#define CONFIG_SEND_FREQUENCY               50  /* 50Hz: RX를 921600으로 낮춰 시리얼 손상을 줄이기 위함 (전체 CSI 기준 대역폭 약 71%) */
 #define CONFIG_TX_STATS_INTERVAL_MS         5000
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)

@@ -1,6 +1,6 @@
 # RX — CSI 수신기
 
-> 담당: 팀원 · 기반: esp-csi `examples/get-started/csi_recv` · 상태: **921600·2M 실측 완료, 보레이트 미확정(2M에서 PC 바이트 손실)**
+> 담당: 팀원 · 기반: esp-csi `examples/get-started/csi_recv` · 상태: **921600 + TX 50Hz로 변경(브랜치 `rate-50hz-921600`), 보드 실측 전**
 
 TX가 보낸 ESP-NOW 패킷에서 CSI를 추출하고, 패킷 1개당 1줄씩 시리얼로 출력합니다.
 출력은 PC의 [`pc/csi_logger.py`](../../pc/csi_logger.py)가 받아서 CSV로 저장합니다.
@@ -15,7 +15,8 @@ TX가 보낸 ESP-NOW 패킷에서 CSI를 추출하고, 패킷 1개당 1줄씩 �
 |---|---|
 | 채널 | 11 (`CONFIG_LESS_INTERFERENCE_CHANNEL`) |
 | 수신 필터 MAC | `1a:00:00:00:00:00` (TX가 `esp_wifi_set_mac`으로 고정한 값) |
-| 방식 | ESP-NOW 브로드캐스트, 100Hz |
+| 방식 | ESP-NOW 브로드캐스트, **50Hz** |
+| RX 시리얼 | **921600bps** (TX 50Hz와 짝. 100Hz면 2M 필요) |
 | 속도 | MCS0 LGI, phymode HT40 |
 | `id` 필드 | TX 페이로드 `uint32_t count` (시퀀스 번호) |
 | 절전 | `WIFI_PS_NONE` |
@@ -72,14 +73,21 @@ idf.py -p COMx flash monitor       # CSI_DATA·STATS 줄 확인 → Ctrl+]로 �
 
 ```
 csi_rx: own_mac=30:76:f5:..:..:..  filter_tx_mac=1a:00:00:00:00:00
-csi_rx: channel=11  bw=HT40-  lltf_only=0  baud=2000000
+csi_rx: channel=11  bw=HT40-  lltf_only=0  baud=921600
 ```
 
-## 보레이트 / 출력량 (921600bps 병목 대응)
+## 보레이트 / 출력량
 
-921600bps에서 저장률이 71.5Hz에 그쳐 시리얼 병목으로 판단했고(아래 측정 기록), **현재 보레이트는 2M(2000000)** 입니다. 그래도 `queue_drop`이 계속 생기면 (b)를 씁니다.
+**현재 설정: 921600bps + TX 50Hz** (2026-11-13). 전체 CSI 한 줄 약 1.3KB × 50Hz ≈ 0.66Mbps = 921600의 약 71%(계산값).
 
-- **(a) 보레이트 2M (적용됨)** — `sdkconfig`와 `sdkconfig.defaults` 둘 다 `CONFIG_ESP_CONSOLE_UART_BAUDRATE=2000000`. `sdkconfig`도 커밋되어 있으므로 값을 바꿀 때는 두 파일을 같이 고칩니다. `idf.py monitor`는 자동으로 따라갑니다(`CONFIG_ESPTOOLPY_MONITOR_BAUD`는 콘솔 보레이트에서 파생되는 숨은 옵션이라 빌드 때 2000000으로 갱신됨, `build/project_description.json`의 `monitor_baud`로 확인). 로거 기본값도 2000000입니다(다른 보레이트 펌웨어는 `--baud`로 지정). CH340은 최대 2Mbps.
+| 설정 | 대역폭 | 실측 |
+|---|---|---|
+| 921600 + 91~100Hz | 부족 (약 1.2~1.3Mbps 필요) | 저장률 71.5Hz에서 막힘, CSI 행 손상 0.08% |
+| 2M + 91~100Hz | 충분 (`queue_drop` 0) | **PC 수신 바이트 손실로 CSI 행 약 11% 손상** |
+| **921600 + 50Hz (현재)** | 약 71% | 보드 실측 전 |
+
+- **보레이트 위치** — `sdkconfig`와 `sdkconfig.defaults` 둘 다 `CONFIG_ESP_CONSOLE_UART_BAUDRATE`. `sdkconfig`도 커밋되어 있으므로 값을 바꿀 때는 두 파일을 같이 고칩니다. `idf.py monitor`는 자동으로 따라갑니다(`CONFIG_ESPTOOLPY_MONITOR_BAUD`는 콘솔 보레이트에서 파생되는 숨은 옵션, `build/project_description.json`의 `monitor_baud`로 확인). 로거 기본값도 921600입니다(다른 보레이트는 `--baud`로 지정).
+- **100Hz로 되돌릴 때** — TX `CONFIG_SEND_FREQUENCY` 100, RX 보레이트 2000000, 로거 `--baud 2000000`을 함께 바꿉니다. 2M 바이트 손실은 로거가 손상 행을 걸러내지만, 숫자 하나가 다른 숫자로 바뀐 손상은 못 잡으므로 줄 체크섬이나 (b)를 검토합니다.
 - **(b) LLTF만 출력** — `idf.py menuconfig` → **CSI RX Config** → `CSI 앞 128바이트(LLTF, 64 서브캐리어)만 출력`. `len`이 128이 되며 출력량이 약 1/3. CSI 설정 자체는 그대로. **PC 분석은 64 서브캐리어 기준이 됨.**
 
 menuconfig → **CSI RX Config** 기본값: 채널 11 / HT40 y / LLTF만 n / 큐 32 / STATS 5초
@@ -115,13 +123,13 @@ python rx_stats.py ..\data\<세션>\*.csv     # events.csv·*_stats.csv는 자�
 ```powershell
 cd E:\esp\wifi-sensing\pc
 pip install -r requirements.txt
-python csi_logger.py --port COM5   # 기본 2M, 저장소의 data\<세션>\에 저장. RX 여러 대: --port COM5 COM6
+python csi_logger.py --port COM5   # 기본 921600, 저장소의 data\<세션>\에 저장. RX 여러 대: --port COM5 COM6
 python csi_io.py ..\data\<세션>\COM5.csv               # 히트맵·움직임 그래프 PNG
 ```
 
 - 실행 중 라벨을 입력하고 Enter를 누르면 이후 패킷에 그 라벨이 붙습니다. 라벨 예: `empty`, `sit`, `lying`, `walk`, `door`, `fan`, `fall`
 - 로거는 5초마다 수신 Hz, 손실률, RSSI, 손상 행·손상 헤더 수를 출력합니다. 손상 행은 저장하지 않으므로 로거의 손실률 = 무선 손실 + 시리얼 손상이고, 무선 손실만 보려면 `<포트>_stats.csv`의 `seq_lost`를 봅니다.
-- `data\`는 git에서 제외됩니다. RX 1대당 시간당 약 300MB입니다(100Hz, 전체 CSI 기준).
+- `data\`는 git에서 제외됩니다. RX 1대당 시간당 약 150MB입니다(50Hz, 전체 CSI 기준. 100Hz면 약 300MB).
 
 ## 배치
 
