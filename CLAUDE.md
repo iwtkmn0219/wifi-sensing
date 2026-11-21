@@ -24,6 +24,7 @@ E:\esp\
    ├─ pc\              # csi_logger.py, csi_io.py, 분석 코드
    ├─ data\            # 수집 로그 (git 제외, RX 1대당 약 150MB/시간, 50Hz 기준)
    ├─ dataset\         # 공유용으로 고른 세션 (gzip, git 포함·공개). 목록과 추가 방법은 dataset\README.md
+   ├─ processed\       # pc\preprocess.py 출력 (세션\RX.npz + summary.csv, git 제외, 다시 만들 수 있음)
    └─ docs\            # 인수인계 문서
 ```
 
@@ -47,6 +48,7 @@ python csi_logger.py --simulate                  # 보드 없이 테스트
 python csi_logger.py --port COM5                 # 기본 921600·저장소 data\<세션>\. RX 여러 대: --port COM5 COM6
 python rx_stats.py ..\data\<세션>\*.csv          # 수신 Hz·손실률·시리얼 손상·보드 STATS 요약
 python csi_io.py ..\data\<세션>\COM5_csi.csv     # 히트맵·움직임 그래프 PNG (--breath: 라벨별 호흡 주기성)
+python preprocess.py ..\data\<세션> ..\dataset\*  # 전처리 → ..\processed\<세션>\<RX>.npz (id 격자 10Hz, 노이즈 제거, 라벨·클래스·valid)
 ```
 
 ## TX ↔ RX 계약 (변경 시 양쪽 동시 수정)
@@ -106,6 +108,9 @@ python csi_io.py ..\data\<세션>\COM5_csi.csv     # 히트맵·움직임 그래
 - [x] 50Hz + 921600 적용·확정 (2026-11-13) — TX 50.00Hz·간격 20.00ms, `queue_drop` 0, **CSI 행 손상 0/5773**, 무선 손실 3.65%, 저장률 48.1Hz
 - [ ] 무선 손실 원인 조사 — 배치에 따라 28.7%(RSSI −64.7) ~ 3.7~6%(RSSI −50~−54)로 변동. 같은 시각 TX on-air Hz 대조, HT20/HT40·채널·배치 비교 (TX·RX 동시 변경)
 - [ ] RX 출력 형식 확정 — 현재 csi_recv long format 그대로, `rx_id`는 로거 `rx`(포트) 열로 대체 중
+- [x] 전처리 `pc/preprocess.py` (2026-11-21) — 손상·중복·재부팅 정리, id×TX주기 시간축(RX끼리 같은 id 격자), null 서브캐리어 제외, 이득 정규화+Hampel, 라벨 통일·클래스(empty/static/hold/motion)·경계 제외
+  - 라벨 → 클래스 표는 `preprocess.py`의 `CLASS_OF`. 새 라벨을 쓰면 여기에 추가한다(없으면 경고하고 학습에서 제외)
+  - RX마다 null 서브캐리어 판정이 달라 열 수가 다를 수 있다(예: 183 vs 181). 두 RX를 함께 쓰려면 `sc_index` 교집합으로 맞춘다
 - [ ] 움직임 판별 → 호흡 검출 → 상태 머신 → 알림(텔레그램 등, 이후 AWS IoT Core/Lambda/SNS 확장)
 - [ ] 보드 2대 추가 도착 후 RX2(출입문) 구성, 다중 RX를 `id` 기준으로 정렬
 
