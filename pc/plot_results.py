@@ -25,12 +25,13 @@ import pandas as pd
 from sklearn.metrics import balanced_accuracy_score
 
 from features import FEATURES
-from train import FEATURE_SETS, ROOT, models, temporal_split
+from train import FEATURE_SETS, MODEL_KEYS, ROOT, models, temporal_split
 
 # 팔레트 (dataviz 기본, light): 클래스 = slot1 blue(빈 방) / slot2 orange(재실). 모델은 잉크 명암으로 구분
 C_EMPTY, C_STATIC = "#2a78d6", "#eb6834"
 INK, INK2, GRID, SURF = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
-C_LR, C_RF, C_BASE = "#52514e", "#a9a7a0", "#d6d4cd"
+# 모델 막대 색 (잉크 명암 3단계, 클래스 색과 겹치지 않게)
+MODEL_COLOR = {"로지스틱 회귀": "#3a3936", "랜덤 포레스트": "#85837d", "XGBoost": "#c4c2bb"}
 SESSION_NAME = {"20261121_155026": "빈 방 (15:50, 26분)",
                 "20261121_162338": "재실 A (16:23, 12분)",
                 "20261121_163812_breath": "재실 B (16:38, 11분)"}
@@ -65,7 +66,18 @@ def bar_labels(ax, bars, fmt="{:.2f}"):
     for b in bars:
         h = b.get_height()
         ax.text(b.get_x() + b.get_width() / 2, h + 0.015, fmt.format(h), ha="center", va="bottom",
-                fontsize=8, color=INK)
+                fontsize=7.5, color=INK)
+
+
+def grouped_bars(ax, vals: dict[str, list[float]], n_groups: int) -> None:
+    """모델별 막대를 그룹마다 나란히. 막대 사이 2px 표면색 간격, 값 라벨."""
+    k = len(vals)
+    w = 0.8 / k
+    x = np.arange(n_groups)
+    for j, (name, v) in enumerate(vals.items()):
+        b = ax.bar(x + (j - (k - 1) / 2) * w, v, w * 0.95, color=MODEL_COLOR.get(name, INK2), label=name,
+                   edgecolor=SURF, linewidth=1.5)
+        bar_labels(ax, b)
 
 
 def main() -> None:
@@ -88,7 +100,8 @@ def main() -> None:
         tr2, te2 = temporal_split(df, 0.3, [s])
         mm = fit(tr2, FEATURES)
         g = te2[te2.session == s]
-        held[s] = {n: recall(mm[n], g, FEATURES) for n in ("로지스틱 회귀", "랜덤 포레스트")}
+        held[s] = {n: recall(mm[n], g, FEATURES) for n in MODEL_KEYS if n in mm}
+    names_m = [n for n in MODEL_KEYS if n in m_all]           # 그릴 모델 (xgboost가 없으면 2개)
 
     fig, axes = plt.subplots(2, 2, figsize=(13, 8.6))
     fig.suptitle(f"빈 방 vs 정적 재실 판별 결과 — RX {a.rx}, {win:g}초 창, 2026-11-21 데이터",
@@ -97,40 +110,33 @@ def main() -> None:
     # (a) 평가 방식별
     ax = axes[0, 0]
     groups = ["같은 세션 뒤 30%\n(균형 정확도)", "재실 A 통째로 테스트\n(그 세션 정답률)", "재실 B 통째로 테스트\n(그 세션 정답률)"]
-    lr = [bal(m_all["로지스틱 회귀"], te, FEATURES), held["20261121_162338"]["로지스틱 회귀"],
-          held["20261121_163812_breath"]["로지스틱 회귀"]]
-    rf = [bal(m_all["랜덤 포레스트"], te, FEATURES), held["20261121_162338"]["랜덤 포레스트"],
-          held["20261121_163812_breath"]["랜덤 포레스트"]]
-    x = np.arange(3)
-    b1 = ax.bar(x - 0.19, lr, 0.36, color=C_LR, label="로지스틱 회귀")
-    b2 = ax.bar(x + 0.19, rf, 0.36, color=C_RF, label="랜덤 포레스트", edgecolor=SURF, linewidth=2)
-    bar_labels(ax, b1); bar_labels(ax, b2)
+    vals = {n: [bal(m_all[n], te, FEATURES), held["20261121_162338"][n], held["20261121_163812_breath"][n]]
+            for n in names_m}
+    grouped_bars(ax, vals, len(groups))
     ax.axhline(0.5, color=INK2, lw=1, ls=(0, (3, 2)), label="우연 수준 0.5")
-    ax.set_xticks(x, groups)
+    ax.set_xticks(np.arange(len(groups)), groups)
     ax.set_ylim(0, 1.12)
     ax.set_ylabel("점수")
     ax.set_title("(a) 같은 세션 안에서는 높지만, 처음 보는 세션에서는 흔들린다")
-    ax.legend(loc="upper right", fontsize=8, ncol=3, bbox_to_anchor=(1, 1.03))
+    ax.legend(loc="upper right", fontsize=8, ncol=4, bbox_to_anchor=(1, 1.03))
     ax.grid(axis="y", color=GRID, lw=0.6)
 
     # (b) 특징 묶음별
     ax = axes[0, 1]
     names = list(FEATURE_SETS)
-    lr_b, rf_b = [], []
+    vals = {n: [] for n in names_m}
     for nm in names:
         mm = fit(tr, FEATURE_SETS[nm])
-        lr_b.append(bal(mm["로지스틱 회귀"], te, FEATURE_SETS[nm]))
-        rf_b.append(bal(mm["랜덤 포레스트"], te, FEATURE_SETS[nm]))
+        for n in names_m:
+            vals[n].append(bal(mm[n], te, FEATURE_SETS[nm]))
     x = np.arange(len(names))
-    b1 = ax.bar(x - 0.19, lr_b, 0.36, color=C_LR, label="로지스틱 회귀")
-    b2 = ax.bar(x + 0.19, rf_b, 0.36, color=C_RF, label="랜덤 포레스트", edgecolor=SURF, linewidth=2)
-    bar_labels(ax, b1); bar_labels(ax, b2)
+    grouped_bars(ax, vals, len(names))
     ax.axhline(0.5, color=INK2, lw=1, ls=(0, (3, 2)), label="우연 수준 0.5")
     ax.set_xticks(x, ["전체 특징 10개", "호흡 주기 특징만\n(주기성·호흡수 등 5개)", "진폭 흔들림 특징만\n(대역별 표준편차 등 5개)"])
     ax.set_ylim(0, 1.12)
     ax.set_ylabel("균형 정확도 (같은 세션 뒤 30%)")
     ax.set_title("(b) 구분은 주로 진폭 흔들림에서 나온다 (호흡 특징은 우연보다 약간 위)")
-    ax.legend(loc="upper left", fontsize=8, ncol=3)
+    ax.legend(loc="upper left", fontsize=8, ncol=4)
     ax.grid(axis="y", color=GRID, lw=0.6)
 
     # (c) 창 분포
@@ -147,7 +153,7 @@ def main() -> None:
     ax.set_xlabel("진폭 흔들림 amp_std (서브캐리어별 표준편차 중앙값 ×1e3)")
     ax.set_ylabel("서브캐리어 공통 변화 pc1_var_ratio")
     ax.set_title("(c) 창 하나 = 점 하나: 재실 A는 빈 방 쪽과 일부 겹친다")
-    ax.legend(fontsize=8, loc="upper right")
+    ax.legend(fontsize=8, loc="upper left")
     ax.grid(color=GRID, lw=0.6)
 
     # (d) 시간에 따른 재실 확률

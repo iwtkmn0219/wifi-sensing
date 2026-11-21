@@ -140,7 +140,7 @@ def main() -> None:
     ax.set_title(f"(d) 패킷 전체 진폭: 세션 전체 변동계수 {cv:.1f}% → 0%")
     ax.set_ylabel("평균 대비 변화 (%)")
     ax.set_xlabel("시간 (초)")
-    ax.legend(fontsize=8, loc="upper right")
+    ax.legend(fontsize=8, loc="lower right", bbox_to_anchor=(1, 1.06), ncol=2)   # 그래프 위로 (선과 겹치지 않게)
     ax.grid(axis="y", color=GRID, lw=0.6)
 
     # (e) 시간축
@@ -163,11 +163,14 @@ def main() -> None:
     # (f) 라벨 정리
     ax = fig.add_subplot(gs[2, 1])
     raw_lab = df["label"].astype(str).to_numpy()
-    def bands(t, lab, y, h, color_of):
+    span = tp[-1] - tp[0]
+
+    def bands(t, lab, y, h, color_of, min_frac=0.07):
+        """구간 띠. 글자는 띠 폭이 전체의 min_frac 이상일 때만 (좁은 칸에 빽빽하게 쓰지 않음)."""
         chg = np.r_[0, np.where(lab[1:] != lab[:-1])[0] + 1, len(lab)]
         for s, e in zip(chg[:-1], chg[1:]):
             ax.add_patch(plt.Rectangle((t[s], y), t[e - 1] - t[s], h, color=color_of(lab[s]), lw=0))
-            if t[e - 1] - t[s] > 12:
+            if t[e - 1] - t[s] > min_frac * span:
                 ax.text((t[s] + t[e - 1]) / 2, y + h / 2, lab[s], ha="center", va="center", fontsize=7, color="w")
     cls_of_raw = lambda l: CLS_COLOR.get(CLASS_OF.get(normalize_label(l), ""), "#c9c7c0")
     bands(tr, raw_lab, 2.2, 0.8, cls_of_raw)
@@ -176,7 +179,11 @@ def main() -> None:
     bands(tp, np.where(v, "valid", "제외"), 0.0, 0.8, lambda s: INK2 if s == "valid" else "#e4e3df")
     ax.set_xlim(tp[0], tp[-1])
     ax.set_ylim(-0.1, 3.1)
-    ax.set_yticks([0.4, 1.5, 2.6], ["학습에 쓰는 구간\n(valid)", "전처리 후 클래스", "원본 라벨"])
+    # 원본 라벨 이름은 띠 안에 다 쓰기 어려워서 y축 이름에 색 대응을 적는다
+    raw_names = sorted(set(raw_lab), key=lambda l: list(raw_lab).index(l))
+    raw_map = " / ".join(f"{l}→{CLASS_OF.get(normalize_label(l), '없음')}" for l in raw_names)
+    ax.set_yticks([0.4, 1.5, 2.6], ["학습에 쓰는 구간\n(진회색 = valid)", "전처리 후 클래스",
+                                    f"원본 라벨\n({raw_map})"])
     ax.set_xlabel("시간 (초, 세션 전체)")
     ax.set_title(f"(f) 라벨 정리: 이름 통일 → 클래스, 경계 {proc['meta']['edge']:g}초·공백 제외 (유효 {100 * v.mean():.0f}%)")
     for s in ("left", "bottom"):

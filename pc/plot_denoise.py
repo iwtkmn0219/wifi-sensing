@@ -79,7 +79,7 @@ for key, (path, lab) in sessions.items():
         res[(key, stage)] = (grid, A, sc, idx)
 
 fig, axes = plt.subplots(2, 2, figsize=(13, 8.2))
-fig.suptitle("CSI 노이즈 제거 전후 비교 — 이득 정규화 + Hampel 이상치 제거 (COM4, 2026-11-21)",
+fig.suptitle("CSI 노이즈 제거 전후 비교 — 이득 정규화 + Hampel 이상치 제거 ((a)~(c) COM4, (d) COM5 · 2026-11-21)",
              fontsize=12, fontweight="bold", color=INK, x=0.01, ha="left")
 
 # (a) 예시 파형
