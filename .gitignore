@@ -8,3 +8,4 @@ managed_components/
 .vscode
 logs/
 processed/
+!docs/figures/*.png

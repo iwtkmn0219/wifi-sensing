@@ -22,10 +22,10 @@ E:\esp\
    ├─ firmware\tx\     # csi_send 복사본, 여기서 빌드 (담당: 민준)
    ├─ firmware\rx\     # csi_recv 기반 (담당: 팀원)
    ├─ pc\              # csi_logger.py, csi_io.py, 분석 코드
-   ├─ data\            # 수집 로그 (git 제외, RX 1대당 약 150MB/시간, 50Hz 기준)
+   ├─ data\            # 수집 로그 (git 제외, RX 1대당 약 220MB/시간, 50Hz 실측)
    ├─ dataset\         # 공유용으로 고른 세션 (gzip, git 포함·공개). 목록과 추가 방법은 dataset\README.md
    ├─ processed\       # pc\preprocess.py 출력 (세션\RX.npz + summary.csv, git 제외, 다시 만들 수 있음)
-   └─ docs\            # 인수인계 문서
+   └─ docs\            # 인수인계 문서. RESULTS.md = 전체 결과 정리(발표 근거), figures\ = 그림(pc\plot_*.py로 재생성)
 ```
 
 ## 환경
@@ -84,7 +84,7 @@ python train.py                                  # 빈 방 vs 정적 재실 학�
   - 921600은 91~100Hz 전체 CSI에 부족하다(필요 약 1.2~1.3Mbps, 실측 저장률 71.5Hz에서 막힘). 921600에서 CSI 행 손상은 0.08%.
   - 2M은 대역폭은 충분하지만(`queue_drop` 0) PC 수신에서 바이트가 빠져 CSI 행 약 11%가 손상된다(2026-11-13 실측, `firmware/rx/README.md`).
   - 100Hz로 되돌릴 때는 TX `CONFIG_SEND_FREQUENCY`, RX 보레이트(2M), 로거 `--baud`를 함께 바꾸고 줄 체크섬 또는 LLTF만 출력을 검토한다.
-- 데이터 양은 50Hz·전체 CSI 기준 RX 1대당 약 150MB/시간(100Hz 실측 3분 14.8MB의 절반으로 계산).
+- 데이터 양은 50Hz·전체 CSI 기준 RX 1대당 약 220MB/시간(2026-11-21 실측: 1행 약 1.3KB × 초당 약 47행). 이전에 적은 150MB는 계산 오류였다.
 
 ## 실험 배치
 - **침대를 TX와 RX1 사이에** 둔다.
