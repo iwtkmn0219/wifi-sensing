@@ -65,13 +65,53 @@ def temporal_split(df: pd.DataFrame, test_frac: float,
     return pd.concat(tr), pd.concat(te)
 
 
+try:
+    from xgboost import XGBClassifier
+except ImportError:                       # xgboost가 없으면 이 모델만 건너뛴다
+    XGBClassifier = None
+
+
+class BalancedXGB:
+    """문자열 라벨을 그대로 받는 XGBoost 래퍼.
+    XGBoost는 0/1 정수 라벨만 받고 class_weight가 없어서, 라벨을 바꾸고 scale_pos_weight로 클래스 불균형을 맞춘다.
+    데이터가 적어서(창 ~200개) 얕은 트리·작은 학습률·서브샘플링으로 과적합을 줄인다."""
+
+    def __init__(self, **kw):
+        self.kw = dict(n_estimators=300, max_depth=3, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
+                       min_child_weight=2, reg_lambda=1.0, eval_metric="logloss", random_state=0, n_jobs=1)
+        self.kw.update(kw)
+
+    def fit(self, X, y):
+        self.classes_ = np.unique(y)
+        yi = (y == self.classes_[1]).astype(int)
+        pos = max(int(yi.sum()), 1)
+        self.model_ = XGBClassifier(scale_pos_weight=(len(yi) - pos) / pos, **self.kw).fit(X, yi)
+        return self
+
+    def predict(self, X):
+        return self.classes_[self.model_.predict(X).astype(int)]
+
+    def predict_proba(self, X):
+        return self.model_.predict_proba(X)
+
+    @property
+    def feature_importances_(self):
+        return self.model_.feature_importances_
+
+
 def models() -> dict:
-    return {
+    m = {
         "다수 클래스(기준선)": DummyClassifier(strategy="most_frequent"),
         "로지스틱 회귀": make_pipeline(StandardScaler(), LogisticRegression(class_weight="balanced", max_iter=2000)),
         "랜덤 포레스트": RandomForestClassifier(n_estimators=300, min_samples_leaf=3, class_weight="balanced",
                                           random_state=0),
     }
+    if XGBClassifier is not None:
+        m["XGBoost"] = BalancedXGB()
+    return m
+
+
+MODEL_KEYS = {"로지스틱 회귀": "logreg", "랜덤 포레스트": "rf", "XGBoost": "xgb"}   # 저장 이름, 결과 출력 순서
 
 
 def evaluate(train: pd.DataFrame, test: pd.DataFrame, feats: list[str], classes: list[str], verbose: bool):
@@ -128,21 +168,24 @@ def main() -> None:
     for sess, g in test.groupby("session"):
         src = "통째로 테스트" if any(str(sess).startswith(s) for s in a.test_sessions) else "뒤 30%"
         accs = [f"{name} {np.mean(fitted[name].predict(g[FEATURES].to_numpy(float)) == g['cls'].to_numpy()):.2f}"
-                for name in ("로지스틱 회귀", "랜덤 포레스트")]
+                for name in MODEL_KEYS if name in fitted]
         print(f"  {sess} ({'/'.join(sorted(g.cls.unique()))}, {len(g)}창, {src}): " + " | ".join(accs))
 
-    rf = fitted["랜덤 포레스트"]
-    imp = pd.Series(rf.feature_importances_, index=FEATURES).sort_values(ascending=False)
-    print("\n랜덤 포레스트 특징 중요도:", ", ".join(f"{k} {v:.2f}" for k, v in imp.items()))
+    for name in ("랜덤 포레스트", "XGBoost"):
+        if name in fitted:
+            imp = pd.Series(fitted[name].feature_importances_, index=FEATURES).sort_values(ascending=False)
+            print(f"\n{name} 특징 중요도:", ", ".join(f"{k} {v:.2f}" for k, v in imp.items()))
 
     print("\n[특징 묶음별] 균형 정확도 — 어느 쪽 특징이 점수를 만드는지 (세션 차이 점검)")
     for set_name, feats in FEATURE_SETS.items():
         res, _ = evaluate(train, test, feats, a.classes, verbose=False)
-        print(f"  {set_name:<8} 로지스틱 {res['로지스틱 회귀'][1]:.3f} | 랜덤 포레스트 {res['랜덤 포레스트'][1]:.3f}")
+        print(f"  {set_name:<8} " + " | ".join(f"{n} {res[n][1]:.3f}" for n in MODEL_KEYS if n in res))
 
     out = ROOT / "models"
     out.mkdir(parents=True, exist_ok=True)
-    for name, key in (("로지스틱 회귀", "logreg"), ("랜덤 포레스트", "rf")):
+    for name, key in MODEL_KEYS.items():
+        if name not in fitted:
+            continue
         joblib.dump({"model": fitted[name], "features": FEATURES, "classes": a.classes, "rx": a.rx,
                      "source": str(a.features)}, out / f"{task}_{a.rx}_{key}.joblib")
     print(f"\n모델 저장: {out}\\{task}_{a.rx}_*.joblib | 테스트 창 목록: {ROOT}\\split_{task}_{a.rx}_test.csv")
