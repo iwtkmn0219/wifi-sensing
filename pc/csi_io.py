@@ -4,17 +4,32 @@
 사용 예
     python csi_io.py ../data/20261027_210000/COM5.csv        # 히트맵 PNG 저장
     python csi_io.py ../data/.../sim.csv --show               # 창으로 보기
+    python csi_io.py ../data/.../COM4.csv --breath            # 라벨별 호흡 주기성 점수 (60초 창)
+    python csi_io.py ../data/.../COM4.csv --breath 30 --edge 30   # 30초 창, 라벨 경계 앞뒤 30초 제외
 
 코드에서
     from csi_io import load_csi, subcarrier_segments, null_subcarriers
     df, amp = load_csi("../data/.../COM5.csv")   # amp: (패킷 수, 서브캐리어 수)
     segs = subcarrier_segments(amp.shape[1])      # {'lltf': slice(0, 64), 'htltf': slice(64, 192)}
     keep = ~null_subcarriers(amp)                 # 가드·DC처럼 항상 0인 서브캐리어 제외
+
+    from csi_io import preprocess, breathing_scores
+    grid, A = preprocess(df, amp)                 # 이득 정규화 → 10Hz 재샘플 → Hampel 이상치 제거
+    scores = breathing_scores(grid, A, df)        # 창별 주기성 점수·피크 호흡수·라벨
+
+노이즈 제거 (2026-11-21 실측: COM4 빈 방 `20261121_155026` vs 누워서 호흡 `20261121_163812`)
+    breathing_scores(win=60, edge=30) 기준       분리도   호흡 창 중 빈 방 상위 10% 초과
+    원본 진폭 (gain_norm=False, outlier=False)   −0.04     0%
+    preprocess() 기본값 (이득 정규화 + Hampel)    +0.08    35%   (우연이면 10%)
+    (분리도 = (호흡 중앙값 − 빈 방 중앙값) / 빈 방 IQR. 호흡 창이 17개뿐이라 창 위치에 따라 흔들린다.
+     별도 스크립트에서는 이득 정규화가 가장 효과가 컸고, 0.5초 이동평균은 오히려 나빠져서 기본값에서 뺐다.)
+    아직 판별기로 쓸 수준은 아니며, 당시 COM4 RSSI가 −82dBm으로 낮았다. 신호 세기를 올린 배치에서 다시 확인 필요.
 """
 
 from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -92,8 +107,117 @@ def subcarrier_segments(n_sub: int) -> dict[str, slice]:
 
 
 def null_subcarriers(amp: np.ndarray, thresh: float = 0.5) -> np.ndarray:
-    """가드 밴드·DC처럼 거의 항상 0인 서브캐리어 마스크 (True = 제외 대상)."""
-    return np.nan_to_num(np.nanmedian(amp, axis=0), nan=0.0) < thresh
+    """가드 밴드·DC처럼 거의 항상 0인 서브캐리어 마스크 (True = 제외 대상). 전부 NaN인 열도 제외."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # first_word 무효로 전부 NaN인 열
+        med = np.nanmedian(amp, axis=0)
+    return np.nan_to_num(med, nan=0.0) < thresh
+
+
+# ---------------------------------------------------------------------------
+# 노이즈 제거와 호흡 주기성
+# ---------------------------------------------------------------------------
+BREATH_BAND = (0.1, 0.5)   # Hz, 분당 6~30회
+ANALYSIS_BAND = (0.05, 2.0)
+
+
+def normalize_gain(amp: np.ndarray) -> np.ndarray:
+    """패킷마다 서브캐리어 진폭 벡터를 L2 크기로 나눈다.
+
+    ESP32는 수신 이득(AGC)을 보정하지 않아서 패킷마다 전체 진폭이 같이 오르내린다.
+    호흡은 서브캐리어마다 다르게 영향을 주므로(주파수 선택적), 공통 이득을 나눠도 남는다.
+    """
+    norm = np.sqrt(np.nansum(amp**2, axis=1, keepdims=True))
+    return amp / (norm + 1e-9)
+
+
+def resample(t: np.ndarray, amp: np.ndarray, fs: float = 10.0) -> tuple[np.ndarray, np.ndarray]:
+    """불규칙한 수신 시각(손실 포함)을 fs Hz 등간격 격자로 선형 보간한다."""
+    grid = np.arange(t[0], t[-1], 1 / fs)
+    A = np.stack([np.interp(grid, t, amp[:, j]) for j in range(amp.shape[1])], axis=1)
+    return grid, A
+
+
+def hampel(A: np.ndarray, half_window: int = 10, n_sigma: float = 3.0) -> np.ndarray:
+    """열(서브캐리어)마다 이동 중앙값에서 n_sigma×MAD 넘게 튄 값을 중앙값으로 바꾼다."""
+    s = pd.DataFrame(A)
+    w = 2 * half_window + 1
+    med = s.rolling(w, center=True, min_periods=1).median()
+    mad = (s - med).abs().rolling(w, center=True, min_periods=1).median() * 1.4826
+    return s.where((s - med).abs() <= n_sigma * mad + 1e-9, med).to_numpy()
+
+
+def preprocess(df: pd.DataFrame, amp: np.ndarray, fs: float = 10.0,
+               gain_norm: bool = True, outlier: bool = True) -> tuple[np.ndarray, np.ndarray]:
+    """load_csi 결과 → (시각 격자[pc_time], 노이즈 제거된 진폭 [len(grid), 유효 서브캐리어]).
+
+    순서: null 서브캐리어·앞 2개(first_word 무효 가능) 제외 → 이득 정규화 → fs Hz 재샘플 → Hampel.
+    """
+    keep = ~null_subcarriers(amp)
+    keep[:2] = False
+    A = np.nan_to_num(amp[:, keep].astype(float))
+    if gain_norm:
+        A = normalize_gain(A)
+    grid, A = resample(df["pc_time"].to_numpy(), A, fs)
+    if outlier:
+        A = hampel(A, half_window=int(fs))
+    return grid, A
+
+
+def _bandpass(x: np.ndarray, fs: float, lo: float, hi: float) -> np.ndarray:
+    X = np.fft.rfft(x - x.mean())
+    f = np.fft.rfftfreq(len(x), 1 / fs)
+    X[(f < lo) | (f > hi)] = 0
+    return np.fft.irfft(X, len(x))
+
+
+def periodicity(window: np.ndarray, fs: float = 10.0) -> tuple[float, float]:
+    """한 창 [샘플, 서브캐리어] → (주기성 점수 0~1, 피크 호흡수 회/분).
+
+    서브캐리어별 0.05~2Hz 대역통과·표준화 → PCA 1차 성분 → 0.1~0.5Hz 최대 피크(±1 bin) 파워 / 0.05~2Hz 전체 파워.
+    규칙적인 호흡이면 한 주파수에 파워가 몰려 점수가 높고, 잡음이면 퍼져서 낮다.
+    """
+    B = np.stack([_bandpass(window[:, j], fs, *ANALYSIS_BAND) for j in range(window.shape[1])], axis=1)
+    B = (B - B.mean(0)) / (B.std(0) + 1e-9)
+    u, _, _ = np.linalg.svd(B, full_matrices=False)
+    x = u[:, 0]
+    P = np.abs(np.fft.rfft(x * np.hanning(len(x)))) ** 2
+    f = np.fft.rfftfreq(len(x), 1 / fs)
+    total = P[(f >= ANALYSIS_BAND[0]) & (f <= ANALYSIS_BAND[1])].sum() + 1e-12
+    m = np.where((f >= BREATH_BAND[0]) & (f <= BREATH_BAND[1]))[0]
+    i = m[np.argmax(P[m])]
+    return float(P[max(i - 1, 0):i + 2].sum() / total), float(60 * f[i])
+
+
+def breathing_scores(grid: np.ndarray, A: np.ndarray, df: pd.DataFrame | None = None,
+                     win: float = 60.0, step: float | None = None, fs: float = 10.0,
+                     edge: float = 0.0) -> pd.DataFrame:
+    """창마다 주기성 점수·피크 호흡수를 계산한다.
+
+    df(load_csi 결과)를 주면 각 창에 라벨을 붙이고, 라벨이 바뀌는 창은 'mixed'로 표시한다.
+    edge > 0 이면 라벨 구간 경계에서 edge초 안쪽에 걸친 창도 'mixed'로 둔다(라벨 입력 지연·이동 구간 제외).
+    """
+    step = step or win / 2
+    n, k = int(win * fs), int(step * fs)
+    labels = None
+    if df is not None and "label" in df:
+        idx = np.clip(np.searchsorted(df["pc_time"].to_numpy(), grid), 0, len(df) - 1)
+        labels = df["label"].to_numpy()[idx]
+        if edge > 0:
+            # 라벨이 바뀌는 시각 + 기록 시작·끝에서 edge초 안쪽은 제외
+            ct = np.r_[grid[0], grid[1:][labels[1:] != labels[:-1]], grid[-1]]
+            pos = np.clip(np.searchsorted(ct, grid), 1, len(ct) - 1)
+            dist = np.minimum(np.abs(grid - ct[pos - 1]), np.abs(ct[pos] - grid))
+            labels = np.where(dist < edge, "mixed", labels.astype(object))
+    rows = []
+    for s0 in range(0, len(grid) - n + 1, k):
+        sc, bpm = periodicity(A[s0:s0 + n], fs)
+        lab = None
+        if labels is not None:
+            w = labels[s0:s0 + n]
+            lab = w[0] if (w == w[0]).all() else "mixed"
+        rows.append({"t0": grid[s0], "label": lab, "score": sc, "bpm": bpm})
+    return pd.DataFrame(rows)
 
 
 def quicklook(path: str | Path, show: bool = False) -> Path:
@@ -136,9 +260,33 @@ def quicklook(path: str | Path, show: bool = False) -> Path:
     return out
 
 
+def breath_report(path: str | Path, win: float = 60.0, edge: float = 0.0) -> pd.DataFrame:
+    """라벨별 주기성 점수 요약을 출력하고 창별 결과를 돌려준다."""
+    df, amp = load_csi(path)
+    grid, A = preprocess(df, amp)
+    sc = breathing_scores(grid, A, df, win=win, edge=edge)
+    sc = sc[sc["label"] != "mixed"]
+    print(f"{Path(path).name}: 창 {win:.0f}s, 경계 제외 {edge:.0f}s (점수가 높을수록 규칙적인 호흡 주기)")
+    summary = sc.groupby("label").agg(
+        windows=("score", "size"),
+        score_median=("score", "median"),
+        score_p25=("score", lambda s: s.quantile(0.25)),
+        score_p75=("score", lambda s: s.quantile(0.75)),
+        bpm_median=("bpm", "median"),
+    )
+    print(summary.round(3).to_string())
+    return sc
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("csv")
     ap.add_argument("--show", action="store_true")
+    ap.add_argument("--breath", nargs="?", const=60.0, type=float, metavar="WIN",
+                    help="퀵룩 대신 라벨별 호흡 주기성 점수 출력 (창 길이 초, 기본 60)")
+    ap.add_argument("--edge", type=float, default=0.0, help="--breath: 라벨 경계 앞뒤 제외 초")
     a = ap.parse_args()
-    print("저장:", quicklook(a.csv, a.show))
+    if a.breath:
+        breath_report(a.csv, a.breath, a.edge)
+    else:
+        print("저장:", quicklook(a.csv, a.show))
