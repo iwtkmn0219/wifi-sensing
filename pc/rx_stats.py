@@ -72,7 +72,9 @@ def load_rows(path: str) -> tuple[pd.DataFrame, int, int]:
 
 def board_stats(path: str) -> str | None:
     p = Path(path)
-    sp = p.with_name(p.stem + "_stats.csv")
+    # COM4.csv / COM4.csv.gz / COM4_csi.csv.gz(dataset, Windows 예약 이름 회피) → COM4
+    stem = p.name.removesuffix(".gz").removesuffix(".csv").removesuffix("_csi")
+    sp = p.with_name(stem + "_stats.csv")
     if not sp.exists():
         return None
     s = pd.read_csv(sp)
@@ -87,7 +89,9 @@ def board_stats(path: str) -> str | None:
 
 def report(path: str) -> None:
     name = Path(path).name
-    if name == "events.csv" or name.endswith("_stats.csv"):
+    if not name.endswith((".csv", ".csv.gz")) or name == "events.csv" or name.endswith("_stats.csv"):
+        return
+    if Path(path).parent.name.startswith("phone"):   # dataset/의 휴대폰 센서 데이터
         return
     try:
         df, dropped, bad_len = load_rows(path)

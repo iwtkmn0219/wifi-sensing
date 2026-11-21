@@ -23,6 +23,7 @@ E:\esp\
    ├─ firmware\rx\     # csi_recv 기반 (담당: 팀원)
    ├─ pc\              # csi_logger.py, csi_io.py, 분석 코드
    ├─ data\            # 수집 로그 (git 제외, RX 1대당 약 150MB/시간, 50Hz 기준)
+   ├─ dataset\         # 공유용으로 고른 세션 (gzip, git 포함·공개). 목록과 추가 방법은 dataset\README.md
    └─ docs\            # 인수인계 문서
 ```
 
@@ -109,6 +110,6 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 
 ## 하지 말 것
 - `esp-csi\` 원본 수정
-- `data\`, `build\` 커밋 (`sdkconfig`는 커밋해서 설정 공유)
+- `data\`, `build\` 커밋 (`sdkconfig`는 커밋해서 설정 공유). 공유할 세션은 `dataset\`에 압축해서 넣는다(공개 저장소이므로 참가자 동의 필수, 개인 식별 정보 금지)
 - TX/RX 한쪽만 채널·MAC·대역폭 변경
 - 실험 영상 보관 (라벨링 후 폐기, 참가자 동의 필수)
