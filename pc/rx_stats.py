@@ -3,7 +3,7 @@ csi_logger.py 가 저장한 CSV에서 RX 수신 품질 숫자를 계산한다.
 (수신 Hz, 간격 흔들림, 손실률, RSSI, CSI 길이 — 진행 상태 기록용)
 
 사용 예
-    python rx_stats.py ..\data\20261027_210000\COM4.csv
+    python rx_stats.py ..\data\20261027_210000\COM4_csi.csv
     python rx_stats.py ..\data\20261027_210000\*.csv        # RX 여러 대 (events.csv, *_stats.csv 는 자동 제외)
 
 - 간격은 보드 시각(local_timestamp, us)으로 계산한다. PC 수신 시각(pc_time)은 시리얼 버퍼링 때문에 흔들린다.
@@ -72,7 +72,7 @@ def load_rows(path: str) -> tuple[pd.DataFrame, int, int]:
 
 def board_stats(path: str) -> str | None:
     p = Path(path)
-    # COM4.csv / COM4.csv.gz / COM4_csi.csv.gz(dataset, Windows 예약 이름 회피) → COM4
+    # COM4.csv(11/21 이전 로거) / COM4_csi.csv / COM4_csi.csv.gz(dataset) → COM4 (Windows 예약 이름 회피)
     stem = p.name.removesuffix(".gz").removesuffix(".csv").removesuffix("_csi")
     sp = p.with_name(stem + "_stats.csv")
     if not sp.exists():

@@ -46,7 +46,7 @@ pip install -r requirements.txt
 python csi_logger.py --simulate                  # 보드 없이 테스트
 python csi_logger.py --port COM5                 # 기본 921600·저장소 data\<세션>\. RX 여러 대: --port COM5 COM6
 python rx_stats.py ..\data\<세션>\*.csv          # 수신 Hz·손실률·시리얼 손상·보드 STATS 요약
-python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래프 PNG
+python csi_io.py ..\data\<세션>\COM5_csi.csv     # 히트맵·움직임 그래프 PNG (--breath: 라벨별 호흡 주기성)
 ```
 
 ## TX ↔ RX 계약 (변경 시 양쪽 동시 수정)
@@ -69,6 +69,7 @@ python csi_io.py ..\data\<세션>\COM5.csv         # 히트맵·움직임 그래
 
 ## RX 출력 → PC 인터페이스
 - 헤더 줄(`type,id,mac,...`)을 부팅 때 1회 + 5초마다 다시 출력하고, 패킷마다 `CSI_DATA,...,len,first_word,"[v0,v1,...]"` 1줄을 출력한다. (`firmware/rx`)
+- 로거는 RX마다 `<포트>_csi.csv`(CSI)와 `<포트>_stats.csv`를 저장한다. `COM4.csv`처럼 `COM4.`으로 시작하는 이름은 Windows 예약 장치 이름이라 git이 읽지 못해서 쓰지 않는다(2026-11-21 이전 세션은 `COM4.csv`).
 - `STATS,...` 줄(5초마다)은 진단용이며 로거가 `<rx>_stats.csv`에 따로 저장한다. `queue_drop`=시리얼 병목, `seq_lost`=무선 손실.
 - 로거는 시리얼 손상(2M에서 실측, 921600+50Hz에서는 0)을 거른다: 알려진 형식이 아닌 헤더는 2번 연속 같아야 인정, `data`가 정수 배열 형식이 아니거나 값 개수 ≠ `len`인 행은 저장하지 않음. `id` 숫자가 다른 숫자로 바뀐 손상은 못 잡는다(`rx_stats.py`가 손실 계산에서만 제외).
 - ESP32 long format은 25필드이고, C5/C6 short format은 15필드다.

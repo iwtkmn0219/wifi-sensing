@@ -2,14 +2,14 @@
 저장된 CSI CSV를 불러와 진폭 행렬로 바꾸고, 빠르게 눈으로 확인하는 도구.
 
 사용 예
-    python csi_io.py ../data/20261027_210000/COM5.csv        # 히트맵 PNG 저장
+    python csi_io.py ../data/20261027_210000/COM5_csi.csv    # 히트맵 PNG 저장
     python csi_io.py ../data/.../sim.csv --show               # 창으로 보기
-    python csi_io.py ../data/.../COM4.csv --breath            # 라벨별 호흡 주기성 점수 (60초 창)
-    python csi_io.py ../data/.../COM4.csv --breath 30 --edge 30   # 30초 창, 라벨 경계 앞뒤 30초 제외
+    python csi_io.py ../data/.../COM4_csi.csv --breath        # 라벨별 호흡 주기성 점수 (60초 창)
+    python csi_io.py ../data/.../COM4_csi.csv --breath 30 --edge 30   # 30초 창, 라벨 경계 앞뒤 30초 제외
 
 코드에서
     from csi_io import load_csi, subcarrier_segments, null_subcarriers
-    df, amp = load_csi("../data/.../COM5.csv")   # amp: (패킷 수, 서브캐리어 수)
+    df, amp = load_csi("../data/.../COM5_csi.csv")   # amp: (패킷 수, 서브캐리어 수)
     segs = subcarrier_segments(amp.shape[1])      # {'lltf': slice(0, 64), 'htltf': slice(64, 192)}
     keep = ~null_subcarriers(amp)                 # 가드·DC처럼 항상 0인 서브캐리어 제외
 
@@ -265,8 +265,11 @@ def breath_report(path: str | Path, win: float = 60.0, edge: float = 0.0) -> pd.
     df, amp = load_csi(path)
     grid, A = preprocess(df, amp)
     sc = breathing_scores(grid, A, df, win=win, edge=edge)
-    sc = sc[sc["label"] != "mixed"]
     print(f"{Path(path).name}: 창 {win:.0f}s, 경계 제외 {edge:.0f}s (점수가 높을수록 규칙적인 호흡 주기)")
+    if sc.empty or (sc["label"] == "mixed").all():
+        print(f"  계산할 창이 없습니다 (기록 {grid[-1] - grid[0]:.0f}s, 라벨 구간이 창 {win:.0f}s보다 짧거나 경계 제외로 모두 빠짐)")
+        return sc
+    sc = sc[sc["label"] != "mixed"]
     summary = sc.groupby("label").agg(
         windows=("score", "size"),
         score_median=("score", "median"),

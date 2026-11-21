@@ -16,9 +16,10 @@ CSI 로거 — esp-csi `csi_recv` 시리얼 출력을 CSV로 저장하고, 시�
     q + Enter         : 종료
 
 출력 (저장소의 data/<세션시각>/, --out으로 변경 가능. data/는 git 제외)
-    <rx>.csv       : 패킷 1개 = 1행. pc_time, label, rx + 보드가 보낸 필드 전부 (검증 통과 행만)
-    <rx>_2.csv ... : 수집 중 열 구성이 바뀌었을 때(펌웨어 교체 등) 이어지는 파일
+    <rx>_csi.csv   : 패킷 1개 = 1행. pc_time, label, rx + 보드가 보낸 필드 전부 (검증 통과 행만)
+    <rx>_csi_2.csv : 수집 중 열 구성이 바뀌었을 때(펌웨어 교체 등) 이어지는 파일
     <rx>_stats.csv : RX의 STATS 줄 (queue_drop, seq_lost 등). 원문은 raw 열
+    (파일 이름을 COM4.csv로 하지 않는 이유: "COM4."로 시작하는 이름은 Windows 예약 장치 이름이라 git 등이 읽지 못함)
     events.csv     : 라벨 변경 시각 기록
 
 손상 처리 (시리얼 바이트 손실 대비, 자세한 규칙은 RxWorker 참고)
@@ -146,7 +147,7 @@ class RxWorker(threading.Thread):
       - 헤더: 알려진 형식이면 바로 사용, 모르는 형식이면 같은 헤더를 2번 연속 받아야 사용
               (보드가 5초마다 헤더를 다시 보내므로, 글자가 깨진 헤더는 연속으로 같게 나오지 않음)
       - 행: 숫자 필드가 숫자가 아니거나, data 값 개수 ≠ len 이면 저장하지 않고 '손상 행'으로 센다
-      - 열 구성이 바뀌면(펌웨어 교체 등) 같은 파일에 헤더를 섞지 않고 <rx>_2.csv 로 새 파일을 연다
+      - 열 구성이 바뀌면(펌웨어 교체 등) 같은 파일에 헤더를 섞지 않고 <rx>_csi_2.csv 로 새 파일을 연다
       - STATS 줄은 <rx>_stats.csv 에 따로 저장한다
     """
 
@@ -160,7 +161,7 @@ class RxWorker(threading.Thread):
         self.columns: list[str] | None = None
         self.header_candidate: list[str] | None = None
         self.part = 1
-        self.path = out_dir / f"{safe_name(name)}.csv"
+        self.path = out_dir / f"{safe_name(name)}_csi.csv"
         self.file = open(self.path, "w", newline="", encoding="utf-8")
         self.writer = csv.writer(self.file)
         self.header_written: list[str] | None = None
@@ -261,7 +262,7 @@ class RxWorker(threading.Thread):
     def open_next_part(self) -> None:
         self.file.close()
         self.part += 1
-        self.path = self.out_dir / f"{safe_name(self.rx_name)}_{self.part}.csv"
+        self.path = self.out_dir / f"{safe_name(self.rx_name)}_csi_{self.part}.csv"
         self.file = open(self.path, "w", newline="", encoding="utf-8")
         self.writer = csv.writer(self.file)
         print(f"\n[{self.rx_name}] 열 구성이 바뀌어 새 파일로 저장: {self.path.name}")

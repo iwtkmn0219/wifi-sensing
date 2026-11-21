@@ -132,7 +132,7 @@ python rx_stats.py ..\data\<세션>\*.csv     # events.csv·*_stats.csv는 자�
 cd E:\esp\wifi-sensing\pc
 pip install -r requirements.txt
 python csi_logger.py --port COM5   # 기본 921600, 저장소의 data\<세션>\에 저장. RX 여러 대: --port COM5 COM6
-python csi_io.py ..\data\<세션>\COM5.csv               # 히트맵·움직임 그래프 PNG
+python csi_io.py ..\data\<세션>\COM5_csi.csv           # 히트맵·움직임 그래프 PNG (로거 저장 이름: <포트>_csi.csv)
 ```
 
 - 실행 중 라벨을 입력하고 Enter를 누르면 이후 패킷에 그 라벨이 붙습니다. 라벨 예: `empty`, `sit`, `lying`, `walk`, `door`, `fan`, `fall`
