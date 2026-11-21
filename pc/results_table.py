@@ -7,9 +7,13 @@ r"""
 
 열
     같은 세션 뒤 30%      : 세션마다 시간순 앞 70% 학습 → 뒤 30% 테스트 (정확도, 균형 정확도)
-    처음 보는 재실 세션   : 재실 세션 하나를 학습에서 통째로 빼고 평가한 균형 정확도 (A, B, 평균, 최저)
-                            ★ 대표값 = 평균. 빈 방 쪽은 세션이 하나뿐이라 같은 세션 뒤 30%로 평가됨
-    재실 놓침률           : 처음 보는 재실 세션 평가 2번에서 재실 창을 빈 방으로 판단한 비율 (낮을수록 좋음)
+    처음 보는 재실 세션   : 재실 세션 하나(A 또는 B)를 학습에서 통째로 빼고 평가 (평가 2번)
+        테스트 세트 = 뺀 재실 세션의 창 전부 + 빈 방 세션의 시간순 뒤 30%
+        (빈 방 세션은 COM4 하나뿐이라 빈 방은 학습한 세션의 뒷부분으로만 평가된다. 다른 재실 세션의 뒤 30%는 넣지 않음)
+        균형 정확도 = (재실 정답률 + 빈 방 정답률) / 2, 평가마다 계산
+        ★ 평균 / 최저 = 평가 2번의 균형 정확도 평균 / 최저
+        재실 놓침률 = 1 − 재실 정답률, 빈 방 오판률 = 1 − 빈 방 정답률 — 둘 다 평가 2번의 평균
+        → 기준이 같아서 ★ 평균 = 1 − (재실 놓침률 + 빈 방 오판률) / 2 가 정확히 성립한다
 """
 from __future__ import annotations
 
@@ -45,29 +49,36 @@ def compute(features_csv: Path, rx: str = "COM4") -> pd.DataFrame:
     rows = {}
     tr, te = temporal_split(df, 0.3)
     same = fit_predict(tr, te)
-    held, miss_n, miss_d = {}, {}, {}
+    folds = {}          # name -> {key: (재실 정답률, 빈 방 정답률)}
+    n_empty_test = {}
     for key, sess in HELD.items():
         tr2, te2 = temporal_split(df, 0.3, [sess])
-        pred = fit_predict(tr2, te2)
+        test = te2[(te2.session == sess) | (te2.cls == "empty")]    # 뺀 재실 세션 + 빈 방 뒤 30%만
+        n_empty_test[key] = int((test.cls == "empty").sum())
+        pred = fit_predict(tr2, test)
+        y = test["cls"].to_numpy()
         for name, p in pred.items():
-            y = te2["cls"].to_numpy()
-            held.setdefault(name, {})[key] = balanced_accuracy_score(y, p)
-            g = (te2.session == sess).to_numpy()
-            miss_n[name] = miss_n.get(name, 0) + int((p[g] == "empty").sum())
-            miss_d[name] = miss_d.get(name, 0) + int(g.sum())
+            r_s = float(np.mean(p[y == "static"] == "static"))
+            r_e = float(np.mean(p[y == "empty"] == "empty"))
+            folds.setdefault(name, {})[key] = (r_s, r_e)
     order = ["다수 클래스(기준선)"] + [n for n in MODEL_KEYS if n in same]
     for name in order:
-        h = held[name]
+        f = folds[name]
+        bal = {k: (rs + re) / 2 for k, (rs, re) in f.items()}
         rows[name] = {
             "같은 세션 정확도": accuracy_score(te["cls"], same[name]),
             "같은 세션 균형 정확도": balanced_accuracy_score(te["cls"], same[name]),
-            "재실 A 제외": h["A"], "재실 B 제외": h["B"],
-            "★ 처음 보는 세션 평균": np.mean(list(h.values())), "처음 보는 세션 최저": min(h.values()),
-            "재실 놓침률": miss_n[name] / miss_d[name],
+            "재실 A 제외": bal["A"], "재실 B 제외": bal["B"],
+            "★ 처음 보는 세션 평균": np.mean(list(bal.values())), "처음 보는 세션 최저": min(bal.values()),
+            "재실 놓침률": np.mean([1 - rs for rs, _ in f.values()]),
+            "빈 방 오판률": np.mean([1 - re for _, re in f.values()]),
         }
+        r = rows[name]   # 기준이 같은지 확인: 평균 균형 정확도 = 1 − (놓침률 + 오판률)/2
+        assert abs(r["★ 처음 보는 세션 평균"] - (1 - (r["재실 놓침률"] + r["빈 방 오판률"]) / 2)) < 1e-9
     t = pd.DataFrame(rows).T
     t.attrs["n"] = {"same_test": f"빈 방 {int((te.cls == 'empty').sum())} · 재실 {int((te.cls == 'static').sum())}창",
                     "held_static": f"재실 A {int((df.session == HELD['A']).sum())} · B {int((df.session == HELD['B']).sum())}창",
+                    "empty_test": f"빈 방 뒤 30% {n_empty_test['A']}창",
                     "win": float(df['win'].iloc[0]), "rx": rx}
     return t
 
@@ -79,7 +90,7 @@ def to_markdown(t: pd.DataFrame) -> str:
     for name, r in t.iterrows():
         cells = []
         for c in cols:
-            v = f"{r[c]:.2f}" if c != "재실 놓침률" else f"{100 * r[c]:.0f}%"
+            v = f"{100 * r[c]:.0f}%" if c.endswith("률") else f"{r[c]:.2f}"
             cells.append(f"**{v}**" if name == best else v)
         lines.append(f"| {'**' + name + '**' if name == best else name} | " + " | ".join(cells) + " |")
     return "\n".join(lines)
@@ -97,17 +108,18 @@ def to_png(t: pd.DataFrame, out: Path) -> None:
     header = ["모델",
               "같은 세션 뒤 30%\n정확도", "같은 세션 뒤 30%\n균형 정확도",
               "처음 보는 세션\n재실 A 학습 제외", "처음 보는 세션\n재실 B 학습 제외",
-              "★ 처음 보는 세션\n평균 (대표값)", "처음 보는 세션\n최저", "재실 놓침률\n(낮을수록 좋음)"]
+              "★ 처음 보는 세션\n평균 (대표값)", "처음 보는 세션\n최저",
+              "재실 놓침률\n(처음 보는 세션)", "빈 방 오판률\n(처음 보는 세션)"]
     body = []
     for name, r in t.iterrows():
-        body.append([name] + [f"{r.iloc[k]:.2f}" for k in range(6)] + [f"{100 * r.iloc[6]:.0f}%"])
+        body.append([name] + [f"{100 * v:.0f}%" if c.endswith("률") else f"{v:.2f}" for c, v in r.items()])
     best = pick_best(t)
-    fig = plt.figure(figsize=(13, 0.9 + 0.62 * (len(body) + 1)))
+    fig = plt.figure(figsize=(14, 1.05 + 0.62 * (len(body) + 1)))
     fig.patch.set_facecolor(SURF)
-    ax = fig.add_axes([0.01, 0.2, 0.98, 0.62])
+    ax = fig.add_axes([0.01, 0.24, 0.98, 0.58])
     ax.axis("off")
     tb = ax.table(cellText=body, colLabels=header, cellLoc="center", bbox=[0, 0, 1, 1],
-                  colWidths=[0.17, 0.11, 0.12, 0.13, 0.13, 0.13, 0.1, 0.11])
+                  colWidths=[0.15, 0.1, 0.11, 0.115, 0.115, 0.12, 0.09, 0.1, 0.1])
     tb.auto_set_font_size(False)
     tb.set_fontsize(10.5)
     for (i, j), cell in tb.get_celld().items():
@@ -129,12 +141,13 @@ def to_png(t: pd.DataFrame, out: Path) -> None:
             cell.PAD = 0.04
     fig.text(0.01, 0.93, f"빈 방 vs 정적 재실 판별 결과 — ESP32 CSI, RX {n['rx']}, {n['win']:g}초 창, 2026-11-21 데이터",
              ha="left", va="top", fontsize=12.5, fontweight="bold", color=INK)
-    fig.text(0.01, 0.16,
-             f"★ 대표값 = 재실 세션 2개({n['held_static']})를 하나씩 학습에서 통째로 빼고 평가한 균형 정확도의 평균. "
+    fig.text(0.01, 0.2,
+             f"처음 보는 세션 평가: 재실 세션 하나({n['held_static']} 중 하나)를 학습에서 통째로 빼고, 테스트 = 그 재실 세션 전부 + {n['empty_test']}. "
+             f"빈 방 세션은 COM4 하나뿐이라 빈 방은 학습한 세션의 뒷부분으로만 평가됨(처음 보는 빈 방은 미검증).\n"
+             f"균형 정확도 = (재실 정답률 + 빈 방 정답률)/2. ★ 평균·놓침률·오판률은 모두 평가 2번의 평균이라 ★ 평균 = 1 - (놓침률 + 오판률)/2. "
              f"굵은 행 = 대표 모델(평균이 같으면 최저값이 높은 쪽).\n"
              f"같은 세션 뒤 30% = 세션마다 시간순 앞 70% 학습 → 뒤 30% 테스트({n['same_test']}). 기준선 = 항상 '빈 방'이라고 답함. "
-             f"재실 놓침률 = 처음 보는 재실 창을 빈 방으로 판단한 비율.\n"
-             f"빈 방 세션은 하나뿐이라 빈 방 쪽은 같은 세션 뒤 30%로 평가됨 (처음 보는 빈 방은 미검증). 테스트는 모두 실측에서 떼어냄(합성 아님).",
+             f"테스트는 모두 실측에서 떼어냄(합성 아님).",
              ha="left", va="top", fontsize=8.5, color=INK2, linespacing=1.6)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150, facecolor=SURF)
