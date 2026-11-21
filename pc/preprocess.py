@@ -76,6 +76,18 @@ NO_CLASS = {"transition", "unlabeled", "check", "dual_check", "board_check", "ra
 
 RESET_DROP = 100           # id가 이만큼 넘게 줄면 TX 재부팅으로 보고 구간을 나눈다
 
+# 측정 뒤에 확인된 라벨 수정 (세션, 원래 라벨 → 새 라벨). 로그 원본은 고치지 않고 여기서 바꾼다
+OVERRIDES_CSV = Path(__file__).resolve().parent / "label_overrides.csv"
+
+
+def load_overrides(session: str) -> dict[str, str]:
+    """label_overrides.csv에서 세션 이름(접두어 일치, 예: 20261121_163812 ↔ 20261121_163812_breath)의 수정 규칙."""
+    if not OVERRIDES_CSV.exists():
+        return {}
+    o = pd.read_csv(OVERRIDES_CSV, dtype=str, keep_default_na=False)
+    o = o[[session.startswith(s) for s in o["session"]]]
+    return {normalize_label(a): normalize_label(b) for a, b in zip(o["from_label"], o["to_label"])}
+
 
 def normalize_label(s: str) -> str:
     s = str(s).strip().lower().replace(" ", "_")
@@ -110,7 +122,7 @@ def tx_period(df: pd.DataFrame) -> float:
 
 
 def process_rx(path: Path, fs_out: float = 10.0, max_gap: float = 0.2, edge: float = 3.0,
-               min_rate_ratio: float = 0.5) -> dict | None:
+               min_rate_ratio: float = 0.5, overrides: dict[str, str] | None = None) -> dict | None:
     df, amp = csi_io.load_csi(path, verbose=False)
     n_rows = len(df)
     if n_rows < 100:                                  # 시리얼 손상 등으로 거의 비어 있는 파일
@@ -148,7 +160,8 @@ def process_rx(path: Path, fs_out: float = 10.0, max_gap: float = 0.2, edge: flo
     # --- 4a. 패킷별 이득 정규화 (보간 전에) ---
     A_all = csi_io.normalize_gain(A_all)
 
-    labels_all = np.array([normalize_label(s) for s in df["label"]], dtype=object)
+    overrides = overrides or {}
+    labels_all = np.array([overrides.get(normalize_label(s), normalize_label(s)) for s in df["label"]], dtype=object)
     pc_all = df["pc_time"].to_numpy(float)
 
     out = {k: [] for k in ("id", "t", "segment", "amp", "valid", "label")}
@@ -244,12 +257,15 @@ def main() -> None:
     rows = []
     for sess in sessions:
         print(f"== {sess.name}")
+        ov = load_overrides(sess.name)
+        if ov:
+            print("  라벨 수정(label_overrides.csv): " + ", ".join(f"{a} → {b}" for a, b in ov.items()))
         for port, path in find_rx_files(sess).items():
             if port in a.exclude:
                 print(f"  {port}: --exclude로 제외")
                 continue
             try:
-                res = process_rx(path, a.fs, a.max_gap, a.edge)
+                res = process_rx(path, a.fs, a.max_gap, a.edge, overrides=ov)
             except Exception as exc:                    # 한 RX가 실패해도 나머지는 진행
                 print(f"  {port}: 실패 — {exc}")
                 rows.append({"session": sess.name, "rx": port, "status": f"실패: {exc}"})
@@ -260,7 +276,7 @@ def main() -> None:
                 rows.append({"session": sess.name, "rx": port, "status": "제외: " + q["skipped"], **q})
                 continue
             meta = {"session": sess.name, "rx": port, "source": str(path), "fs_out": a.fs,
-                    "max_gap": a.max_gap, "edge": a.edge, "quality": q}
+                    "max_gap": a.max_gap, "edge": a.edge, "label_overrides": ov, "quality": q}
             dst = out_root / sess.name / f"{port}.npz"
             save(res, dst, meta)
             by_cls = ", ".join(f"{c} {m}분" for c, m in q["valid_min_by_class"].items()) or "유효 클래스 없음"
